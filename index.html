@@ -14,7 +14,39 @@
     <title>2026 Midterm Elections Tracker</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- Shown before the JS bundle mounts; React replaces it with <LoadingScreen>. -->
+      <div id="boot-loader">
+        <svg viewBox="0 0 50 50" width="56" height="56" fill="none">
+          <circle cx="25" cy="25" r="20" stroke="#2563eb" stroke-opacity="0.15" stroke-width="4" />
+          <path d="M45 25a20 20 0 0 0-20-20" stroke="#2563eb" stroke-width="4" stroke-linecap="round">
+            <animateTransform attributeName="transform" type="rotate" from="0 25 25" to="360 25 25" dur="0.9s" repeatCount="indefinite" />
+          </path>
+        </svg>
+        <p>Fetching live data</p>
+      </div>
+    </div>
+    <style>
+      #boot-loader {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        background: #05070d;
+      }
+      #boot-loader p {
+        margin: 0;
+        font-family: "Inter", system-ui, sans-serif;
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: #e6ebf3;
+      }
+    </style>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

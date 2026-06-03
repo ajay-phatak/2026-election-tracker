@@ -358,7 +358,7 @@ function HistoryPanel({ title, status, hasData, data, series, volume, volumeKey 
   );
 }
 
-export default function MacroMetrics() {
+export default function MacroMetrics({ onReady }) {
   const [control, setControl] = useState(null);
   const [status, setStatus] = useState("loading");
   const [controlHistory, setControlHistory] = useState(null);
@@ -371,19 +371,22 @@ export default function MacroMetrics() {
 
   useEffect(() => {
     let alive = true;
-    fetchControl()
+    const ctl = fetchControl()
       .then((d) => alive && (setControl(d), setStatus("ok")))
       .catch(() => alive && setStatus("error"));
     fetchControlHistory()
       .then((d) => alive && (setControlHistory(d), setControlHistoryStatus("ok")))
       .catch(() => alive && setControlHistoryStatus("error"));
-    fetchPolls()
+    const polls = fetchPolls()
       .then((d) => alive && (setPollData(d), setPollStatus("ok")))
       .catch(() => alive && setPollStatus("error"));
+    // Reveal the dashboard once the above-the-fold market + poll data settles
+    // (history streams in behind the scenes).
+    Promise.allSettled([ctl, polls]).then(() => alive && onReady?.());
     return () => {
       alive = false;
     };
-  }, []);
+  }, [onReady]);
 
   const gb = pollData?.genericBallot;
   const ap = pollData?.approval;
