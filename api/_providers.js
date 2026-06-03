@@ -52,7 +52,10 @@ async function polymarketBySlug(slug) {
       }
       const yesIdx = outcomes.findIndex((o) => String(o).toLowerCase() === "yes");
       const yes = yesIdx >= 0 ? prices[yesIdx] : prices[0];
-      const title = (m.groupItemTitle || m.question || "").toLowerCase();
+      // Some events name the sub-market after the candidate ("Sherrod Brown (D)")
+      // and only mention the party in the question ("Will the Democrats win…"),
+      // so match against both fields combined.
+      const title = `${m.groupItemTitle || ""} ${m.question || ""}`.toLowerCase();
       if (title.includes("democrat")) demYes = toPct(yes);
       else if (title.includes("republican")) repYes = toPct(yes);
     }
@@ -206,7 +209,7 @@ async function polymarketTokens(slug) {
       } catch {
         continue;
       }
-      const title = (m.groupItemTitle || m.question || "").toLowerCase();
+      const title = `${m.groupItemTitle || ""} ${m.question || ""}`.toLowerCase();
       if (title.includes("democrat")) demToken = ids[0];
       else if (title.includes("republican")) repToken = ids[0];
     }
