@@ -4,6 +4,7 @@ import { getRaceByStateCode } from "../lib/races";
 import { fetchRaceOdds, fetchRaceHistory, fetchRacePolls, sourceHasData } from "../lib/api";
 import OverlapBar, { overlapInfo } from "./OverlapBar";
 import TrendChart from "./TrendChart";
+import VolumeStat from "./VolumeStat";
 import { formatUpdated } from "../lib/format";
 
 const POLL_SERIES = [
@@ -268,7 +269,16 @@ export default function RaceDrawer({ stateCode, onClose }) {
                         )}
                         {historyStatus === "ok" &&
                           (expandedHistory?.hasData ? (
-                            <TrendChart data={expandedHistory.points} series={POLL_SERIES} />
+                            <>
+                              <TrendChart
+                                data={expandedHistory.points}
+                                series={POLL_SERIES}
+                                volumeKey={expandedSource === "kalshi" ? "volume" : undefined}
+                              />
+                              {expandedSource !== "kalshi" && expandedHistory.volume && (
+                                <VolumeStat volume={expandedHistory.volume} />
+                              )}
+                            </>
                           ) : (
                             <div className="py-8 text-center text-xs text-ops-muted">
                               No history yet

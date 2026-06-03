@@ -1,26 +1,40 @@
 import { useEffect, useState } from "react";
 import { formatUpdated } from "../lib/format";
-import { fetchControl, fetchPolls, sourceHasData } from "../lib/api";
+import { fetchControl, fetchControlHistory, fetchPolls, sourceHasData } from "../lib/api";
 import OverlapBar, { overlapInfo } from "./OverlapBar";
 import TrendChart from "./TrendChart";
+import VolumeStat from "./VolumeStat";
 
 const DEM = "#2563eb";
 const REP = "#dc2626";
 const APPROVE = "#16a34a";
-const DISAPPROVE = "#dc2626";
+const DISAPPROVE = "#ea580c"; // orange — distinct from the GOP red
 
 // ---- shared bits --------------------------------------------------------
 
+// Clickable cards are divs (not <button>) so they can contain the source-switcher
+// buttons; keyboard + role keep them accessible. Nested buttons stopPropagation.
 function CardShell({ title, badge, children, clickable, expanded, onClick }) {
-  const Tag = clickable ? "button" : "div";
+  const interactive = clickable
+    ? {
+        role: "button",
+        tabIndex: 0,
+        onClick,
+        onKeyDown: (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onClick?.(e);
+          }
+        },
+      }
+    : {};
   return (
-    <Tag
-      type={clickable ? "button" : undefined}
-      onClick={onClick}
+    <div
+      {...interactive}
       aria-expanded={clickable ? expanded : undefined}
-      className={`flex min-h-[168px] w-full flex-col gap-3 rounded-xl border p-4 text-left backdrop-blur-sm transition-colors sm:p-5 ${
+      className={`flex min-h-[168px] w-full select-none flex-col gap-3 rounded-xl border p-4 text-left backdrop-blur-sm transition-colors sm:p-5 ${
         expanded ? "border-accent bg-ops-panel" : "border-ops-border bg-ops-panel/80"
-      } ${clickable ? "cursor-pointer hover:border-accent/60" : ""}`}
+      } ${clickable ? "cursor-pointer hover:border-accent/60 focus:outline-none focus-visible:border-accent" : ""}`}
     >
       <div className="flex items-center justify-between">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-ops-muted">
@@ -29,7 +43,7 @@ function CardShell({ title, badge, children, clickable, expanded, onClick }) {
         {badge}
       </div>
       {children}
-    </Tag>
+    </div>
   );
 }
 
@@ -94,7 +108,10 @@ function SourceSwitcher({ source, onPrev, onNext }) {
     <div className="flex items-center gap-0.5 rounded-full border border-ops-border bg-ops-panel-2/60 px-1 py-0.5">
       <button
         type="button"
-        onClick={onPrev}
+        onClick={(e) => {
+          e.stopPropagation();
+          onPrev();
+        }}
         aria-label="Previous source"
         className="rounded-full p-0.5 text-ops-muted transition-colors hover:text-accent"
       >
@@ -105,7 +122,10 @@ function SourceSwitcher({ source, onPrev, onNext }) {
       </span>
       <button
         type="button"
-        onClick={onNext}
+        onClick={(e) => {
+          e.stopPropagation();
+          onNext();
+        }}
         aria-label="Next source"
         className="rounded-full p-0.5 text-ops-muted transition-colors hover:text-accent"
       >
@@ -205,7 +225,7 @@ function PollCard({
 
 // ---- market control card (Senate / House) — two-sided, multi-source -----
 
-function MarketControlCard({ title, status, data }) {
+function MarketControlCard({ title, status, data, isExpanded, onToggle, onSourceChange }) {
   const [index, setIndex] = useState(0);
   const sources = data?.sources || [];
   const current = sources[index] || null;
@@ -213,9 +233,19 @@ function MarketControlCard({ title, status, data }) {
   const hasData = sourceHasData(current);
   const band = hasData ? overlapInfo(current.demYes, current.repYes) : null;
 
+  // History is per-source; keep the open panel pointed at the visible source.
+  const changeSource = (delta) => {
+    const ni = (index + delta + sources.length) % sources.length;
+    setIndex(ni);
+    if (isExpanded) onSourceChange(sources[ni]?.id);
+  };
+
   return (
     <CardShell
       title={title}
+      clickable={status === "ok" && hasData}
+      expanded={isExpanded}
+      onClick={() => hasData && onToggle(current.id)}
       badge={
         hasData ? (
           <LeadBadge
@@ -254,12 +284,18 @@ function MarketControlCard({ title, status, data }) {
               rightColor={REP}
             />
             <OverlapBar demYes={current.demYes} repYes={current.repYes} />
-            <div className="flex h-3 items-center">
-              {band && (
+            <div className="flex h-4 items-center justify-between">
+              {band ? (
                 <span className="text-[10px] font-medium tracking-wide" style={{ color: band.color }}>
                   {band.text}
                 </span>
+              ) : (
+                <span />
               )}
+              <span className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent">
+                <DownChevron flipped={isExpanded} />
+                {isExpanded ? "Hide history" : "View history"}
+              </span>
             </div>
           </>
         ) : (
@@ -272,8 +308,8 @@ function MarketControlCard({ title, status, data }) {
         {multi ? (
           <SourceSwitcher
             source={current?.label}
-            onPrev={() => setIndex((i) => (i - 1 + sources.length) % sources.length)}
-            onNext={() => setIndex((i) => (i + 1) % sources.length)}
+            onPrev={() => changeSource(-1)}
+            onNext={() => changeSource(1)}
           />
         ) : (
           <span />
@@ -297,18 +333,50 @@ const APPROVAL_SERIES = [
   { key: "disapprove", color: DISAPPROVE, label: "Disapprove" },
 ];
 
+// Full-width history panel rendered below the card grid (so expanding doesn't
+// distort the 4-card row). Shared by the poll cards and the control cards.
+function HistoryPanel({ title, status, hasData, data, series, volume, volumeKey }) {
+  return (
+    <div className="rounded-xl border border-ops-border bg-ops-panel/60 p-4 sm:p-5">
+      <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ops-muted">
+        {title}
+      </div>
+      {status === "loading" && <div className="h-56 animate-pulse rounded bg-ops-panel-2/60" />}
+      {status === "error" && (
+        <div className="py-8 text-center text-xs text-ops-muted">Couldn’t load history.</div>
+      )}
+      {status === "ok" &&
+        (hasData ? (
+          <>
+            <TrendChart data={data} series={series} volumeKey={volumeKey} />
+            {volume && <VolumeStat volume={volume} />}
+          </>
+        ) : (
+          <div className="py-8 text-center text-xs text-ops-muted">No history yet</div>
+        ))}
+    </div>
+  );
+}
+
 export default function MacroMetrics() {
   const [control, setControl] = useState(null);
   const [status, setStatus] = useState("loading");
+  const [controlHistory, setControlHistory] = useState(null);
+  const [controlHistoryStatus, setControlHistoryStatus] = useState("loading");
   const [pollData, setPollData] = useState(null);
   const [pollStatus, setPollStatus] = useState("loading");
-  const [expandedMetric, setExpandedMetric] = useState(null); // 'genericBallot' | 'approval' | null
+  // One expansion at a time:
+  //   { type:'poll', id } | { type:'control', chamber, sourceId } | null
+  const [expanded, setExpanded] = useState(null);
 
   useEffect(() => {
     let alive = true;
     fetchControl()
       .then((d) => alive && (setControl(d), setStatus("ok")))
       .catch(() => alive && setStatus("error"));
+    fetchControlHistory()
+      .then((d) => alive && (setControlHistory(d), setControlHistoryStatus("ok")))
+      .catch(() => alive && setControlHistoryStatus("error"));
     fetchPolls()
       .then((d) => alive && (setPollData(d), setPollStatus("ok")))
       .catch(() => alive && setPollStatus("error"));
@@ -319,20 +387,65 @@ export default function MacroMetrics() {
 
   const gb = pollData?.genericBallot;
   const ap = pollData?.approval;
-  const toggle = (m) => setExpandedMetric((cur) => (cur === m ? null : m));
 
-  const panel =
-    expandedMetric === "genericBallot"
-      ? { title: "Generic Ballot", data: gb, series: GENERIC_SERIES }
-      : expandedMetric === "approval"
-        ? { title: "Trump Approval", data: ap, series: APPROVAL_SERIES }
-        : null;
+  const togglePoll = (id) =>
+    setExpanded((cur) => (cur?.type === "poll" && cur.id === id ? null : { type: "poll", id }));
+  const toggleControl = (chamber, sourceId) =>
+    setExpanded((cur) =>
+      cur?.type === "control" && cur.chamber === chamber ? null : { type: "control", chamber, sourceId }
+    );
+  const setControlSource = (chamber, sourceId) =>
+    setExpanded((cur) =>
+      cur?.type === "control" && cur.chamber === chamber ? { ...cur, sourceId } : cur
+    );
+  const ctlExpanded = (chamber) => expanded?.type === "control" && expanded.chamber === chamber;
+
+  // Resolve the active expansion into a HistoryPanel descriptor.
+  let panel = null;
+  if (expanded?.type === "poll") {
+    const isGB = expanded.id === "genericBallot";
+    const d = isGB ? gb : ap;
+    panel = {
+      title: `${isGB ? "Generic Ballot" : "Trump Approval"} · polling average over time`,
+      status: "ok",
+      hasData: (d?.trend?.length || 0) > 1,
+      data: d?.trend,
+      series: isGB ? GENERIC_SERIES : APPROVAL_SERIES,
+    };
+  } else if (expanded?.type === "control") {
+    const src = controlHistory?.[expanded.chamber]?.sources?.find((s) => s.id === expanded.sourceId);
+    const isKalshi = expanded.sourceId === "kalshi";
+    panel = {
+      title: `${expanded.chamber === "senate" ? "Senate" : "House"} Control · ${src?.label || ""} · win probability over time`,
+      status: controlHistoryStatus,
+      hasData: Boolean(src?.hasData),
+      data: src?.points,
+      series: GENERIC_SERIES,
+      // Kalshi candles carry per-day volume -> bars; Polymarket only aggregate -> stat.
+      volumeKey: isKalshi ? "volume" : undefined,
+      volume: isKalshi ? undefined : src?.volume,
+    };
+  }
 
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <MarketControlCard title="Senate Control" status={status} data={control?.senate} />
-        <MarketControlCard title="House Control" status={status} data={control?.house} />
+        <MarketControlCard
+          title="Senate Control"
+          status={status}
+          data={control?.senate}
+          isExpanded={ctlExpanded("senate")}
+          onToggle={(sid) => toggleControl("senate", sid)}
+          onSourceChange={(sid) => setControlSource("senate", sid)}
+        />
+        <MarketControlCard
+          title="House Control"
+          status={status}
+          data={control?.house}
+          isExpanded={ctlExpanded("house")}
+          onToggle={(sid) => toggleControl("house", sid)}
+          onSourceChange={(sid) => setControlSource("house", sid)}
+        />
         <PollCard
           title="Generic Ballot"
           status={pollStatus}
@@ -344,8 +457,8 @@ export default function MacroMetrics() {
           rightColor={REP}
           lastUpdated={gb?.lastUpdated}
           expandable={pollStatus === "ok" && (gb?.trend?.length || 0) > 1}
-          expanded={expandedMetric === "genericBallot"}
-          onToggle={() => toggle("genericBallot")}
+          expanded={expanded?.type === "poll" && expanded.id === "genericBallot"}
+          onToggle={() => togglePoll("genericBallot")}
         />
         <PollCard
           title="Trump Approval"
@@ -358,19 +471,12 @@ export default function MacroMetrics() {
           rightColor={DISAPPROVE}
           lastUpdated={ap?.lastUpdated}
           expandable={pollStatus === "ok" && (ap?.trend?.length || 0) > 1}
-          expanded={expandedMetric === "approval"}
-          onToggle={() => toggle("approval")}
+          expanded={expanded?.type === "poll" && expanded.id === "approval"}
+          onToggle={() => togglePoll("approval")}
         />
       </div>
 
-      {panel && (panel.data?.trend?.length || 0) > 1 && (
-        <div className="rounded-xl border border-ops-border bg-ops-panel/60 p-4 sm:p-5">
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ops-muted">
-            {panel.title} · polling average over time
-          </div>
-          <TrendChart data={panel.data.trend} series={panel.series} />
-        </div>
-      )}
+      {panel && <HistoryPanel {...panel} />}
     </div>
   );
 }

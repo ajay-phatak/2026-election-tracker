@@ -12,7 +12,6 @@
 import { WATCHED_RACES, CONTROL_MARKETS } from "../src/config/races.config.js";
 
 const PM_BASE = "https://gamma-api.polymarket.com";
-const KALSHI_BASE = "https://external-api.kalshi.com/trade-api/v2";
 // Polymarket 403s requests without a UA header.
 const UA = "2026-election-tracker/1.0 (dashboard)";
 
@@ -63,55 +62,106 @@ async function polymarketBySlug(slug) {
   }
 }
 
-// ---- Kalshi -------------------------------------------------------------
-// Prices are integer cents (0-100). Many 2026 markets are illiquid -> null.
-function kalshiPrice(m) {
-  if (!m) return null;
-  if (m.last_price != null && m.last_price > 0) return m.last_price;
-  if (m.yes_bid != null && m.yes_ask != null && (m.yes_bid > 0 || m.yes_ask > 0)) {
-    return Math.round((m.yes_bid + m.yes_ask) / 2);
-  }
-  return null;
+// ---- Kalshi (live on the elections host w/ candlestick price + volume history) ----
+const KALSHI_ELECTIONS = "https://api.elections.kalshi.com/trade-api/v2";
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// The elections host rate-limits bursts (HTTP 429 after ~5 rapid requests). Serialize
+// all requests to it through one chain and retry 429s with backoff.
+let kalshiChain = Promise.resolve();
+function kalshiFetch(url) {
+  const exec = async () => {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const r = await fetch(url, { headers: { "User-Agent": UA, Accept: "application/json" } });
+      if (r.status === 429) {
+        await sleep(250 * (attempt + 1));
+        continue;
+      }
+      if (!r.ok) throw new Error(`${url} -> ${r.status}`);
+      return r.json();
+    }
+    throw new Error(`${url} -> 429 (retries exhausted)`);
+  };
+  const run = kalshiChain.then(exec, exec);
+  kalshiChain = run.then(
+    () => {},
+    () => {}
+  );
+  return run;
 }
 
-async function kalshiBySeries(series) {
-  if (!series) return { demYes: null, repYes: null };
+// Daily candles for one Kalshi market -> [{ t, p (0-100), vol }]. Empty on failure.
+async function kalshiCandles(series, ticker, { days = 730 } = {}) {
+  if (!series || !ticker) return [];
+  const end = Math.floor(Date.now() / 1000);
+  const start = end - days * 86400;
   try {
-    const data = await getJson(
-      `${KALSHI_BASE}/markets?series_ticker=${encodeURIComponent(series)}&limit=200`
+    const d = await kalshiFetch(
+      `${KALSHI_ELECTIONS}/series/${series}/markets/${ticker}/candlesticks?period_interval=1440&start_ts=${start}&end_ts=${end}`
     );
-    const markets = data.markets || [];
-    const party = (m) => {
-      const sub = (m.yes_sub_title || m.subtitle || "").toLowerCase();
-      const tk = (m.ticker || "").toUpperCase();
-      if (sub.includes("democrat") || tk.endsWith("-D")) return "D";
-      if (sub.includes("republican") || tk.endsWith("-R")) return "R";
-      return null;
-    };
-    // Prefer current-cycle (2026) markets when several exist.
-    const preferred = (arr) =>
-      arr.find((m) => (m.ticker || "").includes("-26-")) || arr[0] || null;
-    const dem = preferred(markets.filter((m) => party(m) === "D"));
-    const rep = preferred(markets.filter((m) => party(m) === "R"));
-    return { demYes: kalshiPrice(dem), repYes: kalshiPrice(rep) };
+    return (d.candlesticks || [])
+      .map((c) => ({
+        t: c.end_period_ts,
+        p: c.price?.close_dollars != null ? Math.round(parseFloat(c.price.close_dollars) * 1000) / 10 : null,
+        vol: c.volume_fp != null ? Math.round(parseFloat(c.volume_fp)) : 0,
+      }))
+      .filter((x) => x.p != null);
   } catch {
-    return { demYes: null, repYes: null };
+    return [];
   }
+}
+
+// Build a candlestick cfg for a watched race from its kalshiMarketId (series ticker).
+function kalshiCfgForRace(race) {
+  const s = race.kalshiMarketId;
+  return s ? { series: s, demTicker: `${s}-26-D`, repTicker: `${s}-26-R` } : null;
+}
+
+// Current Kalshi odds from the latest candle close (control markets + state races).
+async function kalshiCandleOdds(cfg) {
+  if (!cfg) return { demYes: null, repYes: null };
+  const [dem, rep] = await Promise.all([
+    kalshiCandles(cfg.series, cfg.demTicker, { days: 10 }),
+    kalshiCandles(cfg.series, cfg.repTicker, { days: 10 }),
+  ]);
+  return {
+    demYes: dem.length ? dem[dem.length - 1].p : null,
+    repYes: rep.length ? rep[rep.length - 1].p : null,
+  };
+}
+
+// Full Kalshi candle history -> { points:[{t,dem,rep,volume}], hasData }.
+async function kalshiCandleHistory(cfg) {
+  if (!cfg) return { points: [], hasData: false };
+  const [dem, rep] = await Promise.all([
+    kalshiCandles(cfg.series, cfg.demTicker),
+    kalshiCandles(cfg.series, cfg.repTicker),
+  ]);
+  const day = (t) => Math.floor(t / 86400) * 86400;
+  const demByT = new Map(dem.map((x) => [day(x.t), x]));
+  const repByT = new Map(rep.map((x) => [day(x.t), x]));
+  const times = [...new Set([...demByT.keys(), ...repByT.keys()])].sort((a, b) => a - b);
+  const points = times.map((t) => {
+    const dd = demByT.get(t);
+    const rr = repByT.get(t);
+    return { t, dem: dd ? dd.p : null, rep: rr ? rr.p : null, volume: (dd ? dd.vol : 0) + (rr ? rr.vol : 0) };
+  });
+  return { points, hasData: points.length > 0 };
 }
 
 // ---- Compose ------------------------------------------------------------
-async function buildSources(polymarketSlug, kalshiMarketId) {
+// Build the two-source { polymarket, kalshi } current-odds shape.
+async function buildSourcesFrom(polymarketSlug, kalshiCfg) {
   const now = new Date().toISOString();
   const [pm, ks] = await Promise.all([
     polymarketBySlug(polymarketSlug),
-    kalshiBySeries(kalshiMarketId),
+    kalshiCandleOdds(kalshiCfg),
   ]);
   const mk = (id, label, r) => ({
     id,
     label,
     demYes: r.demYes,
     repYes: r.repYes,
-    // Stamp freshness only when the provider actually returned data.
     lastUpdated: r.demYes != null || r.repYes != null ? now : null,
   });
   return { sources: [mk("polymarket", "Polymarket", pm), mk("kalshi", "Kalshi", ks)] };
@@ -119,8 +169,8 @@ async function buildSources(polymarketSlug, kalshiMarketId) {
 
 export async function getControl() {
   const [senate, house] = await Promise.all([
-    buildSources(CONTROL_MARKETS.senate.polymarketSlug, CONTROL_MARKETS.senate.kalshiMarketId),
-    buildSources(CONTROL_MARKETS.house.polymarketSlug, CONTROL_MARKETS.house.kalshiMarketId),
+    buildSourcesFrom(CONTROL_MARKETS.senate.polymarketSlug, CONTROL_MARKETS.senate.kalshi),
+    buildSourcesFrom(CONTROL_MARKETS.house.polymarketSlug, CONTROL_MARKETS.house.kalshi),
   ]);
   return { senate, house };
 }
@@ -128,7 +178,7 @@ export async function getControl() {
 export async function getRace(stateCode) {
   const race = WATCHED_RACES.senate.find((r) => r.stateCode === stateCode);
   if (!race) return null;
-  const { sources } = await buildSources(race.polymarketSlug, race.kalshiMarketId);
+  const { sources } = await buildSourcesFrom(race.polymarketSlug, kalshiCfgForRace(race));
   return { stateCode, sources };
 }
 
@@ -136,13 +186,16 @@ export async function getRace(stateCode) {
 
 const CLOB_BASE = "https://clob.polymarket.com";
 
-// The Yes-token clob id for the Democrat and Republican sub-markets of an event.
+const num = (x) => (x == null || Number.isNaN(Number(x)) ? null : Number(x));
+
+// The Yes-token clob ids for the Democrat/Republican sub-markets of an event,
+// plus the event-level aggregate volume/liquidity (cumulative across the markets).
 async function polymarketTokens(slug) {
-  if (!slug) return { demToken: null, repToken: null };
+  if (!slug) return { demToken: null, repToken: null, volume: null };
   try {
     const data = await getJson(`${PM_BASE}/events?slug=${encodeURIComponent(slug)}`);
     const ev = Array.isArray(data) ? data[0] : null;
-    if (!ev || !ev.markets) return { demToken: null, repToken: null };
+    if (!ev || !ev.markets) return { demToken: null, repToken: null, volume: null };
     let demToken = null;
     let repToken = null;
     for (const m of ev.markets) {
@@ -157,9 +210,15 @@ async function polymarketTokens(slug) {
       if (title.includes("democrat")) demToken = ids[0];
       else if (title.includes("republican")) repToken = ids[0];
     }
-    return { demToken, repToken };
+    const volume = {
+      total: num(ev.volume),
+      h24: num(ev.volume24hr),
+      week: num(ev.volume1wk),
+      liquidity: num(ev.liquidity),
+    };
+    return { demToken, repToken, volume };
   } catch {
-    return { demToken: null, repToken: null };
+    return { demToken: null, repToken: null, volume: null };
   }
 }
 
@@ -176,26 +235,50 @@ async function pricesHistory(token, fidelity = 1440) {
   }
 }
 
-// Align the two Yes-token series by timestamp into [{ t, dem, rep }].
+// Align the two Yes-token series into [{ t, dem, rep }]. Snap to the UTC day so the
+// two tokens (whose candle timestamps differ by a few seconds) line up instead of
+// producing alternating half-null rows.
 function mergeSeries(dem, rep) {
-  const repByT = new Map(rep.map((x) => [x.t, x.p]));
-  const demByT = new Map(dem.map((x) => [x.t, x.p]));
-  const times = [...new Set([...dem.map((x) => x.t), ...rep.map((x) => x.t)])].sort((a, b) => a - b);
+  const day = (t) => Math.floor(t / 86400) * 86400;
+  const demByT = new Map(dem.map((x) => [day(x.t), x.p]));
+  const repByT = new Map(rep.map((x) => [day(x.t), x.p]));
+  const times = [...new Set([...demByT.keys(), ...repByT.keys()])].sort((a, b) => a - b);
   return times.map((t) => ({ t, dem: demByT.get(t) ?? null, rep: repByT.get(t) ?? null }));
+}
+
+// Polymarket win-probability history (price line + aggregate volume; no per-point volume).
+async function polymarketEventHistory(slug) {
+  const { demToken, repToken, volume } = await polymarketTokens(slug);
+  const [dem, rep] = await Promise.all([pricesHistory(demToken), pricesHistory(repToken)]);
+  const points = mergeSeries(dem, rep);
+  return { points, hasData: points.length > 0, volume };
+}
+
+// Polymarket carries the price line (+ aggregate volume); Kalshi carries price +
+// per-day volume bars (hasVolumeSeries). Shared by control markets and state races.
+async function bothHistory(polymarketSlug, kalshiCfg) {
+  const [pm, ks] = await Promise.all([
+    polymarketEventHistory(polymarketSlug),
+    kalshiCandleHistory(kalshiCfg),
+  ]);
+  return {
+    sources: [
+      { id: "polymarket", label: "Polymarket", points: pm.points, hasData: pm.hasData, volume: pm.volume },
+      { id: "kalshi", label: "Kalshi", points: ks.points, hasData: ks.hasData, hasVolumeSeries: true },
+    ],
+  };
 }
 
 export async function getRaceHistory(stateCode) {
   const race = WATCHED_RACES.senate.find((r) => r.stateCode === stateCode);
   if (!race) return null;
-  const { demToken, repToken } = await polymarketTokens(race.polymarketSlug);
-  const [dem, rep] = await Promise.all([pricesHistory(demToken), pricesHistory(repToken)]);
-  const points = mergeSeries(dem, rep);
-  return {
-    stateCode,
-    sources: [
-      { id: "polymarket", label: "Polymarket", points, hasData: points.length > 0 },
-      // Kalshi candlesticks exist but its 2026 markets are illiquid -> no history yet.
-      { id: "kalshi", label: "Kalshi", points: [], hasData: false },
-    ],
-  };
+  return { stateCode, ...(await bothHistory(race.polymarketSlug, kalshiCfgForRace(race))) };
+}
+
+export async function getControlHistory() {
+  const [senate, house] = await Promise.all([
+    bothHistory(CONTROL_MARKETS.senate.polymarketSlug, CONTROL_MARKETS.senate.kalshi),
+    bothHistory(CONTROL_MARKETS.house.polymarketSlug, CONTROL_MARKETS.house.kalshi),
+  ]);
+  return { senate, house };
 }

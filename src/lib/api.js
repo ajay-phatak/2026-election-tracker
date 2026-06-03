@@ -33,6 +33,11 @@ export function fetchPolls() {
   return getJson("/api/polls", "polls");
 }
 
+// Win-probability history for the control markets: { senate:{sources}, house:{sources} }
+export function fetchControlHistory() {
+  return getJson("/api/control-history", "control-history");
+}
+
 const oddsCache = new Map();
 export function fetchRaceOdds(stateCode) {
   return memoize(oddsCache, stateCode, () =>
