@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   senateControl,
   houseControl,
@@ -28,6 +29,42 @@ function SplitBar({ leftPct, rightPct, leftColor, rightColor }) {
   );
 }
 
+function Chevron({ dir }) {
+  const d = dir === "left" ? "M11 4L6 8l5 4" : "M5 4l5 4-5 4";
+  return (
+    <svg width="14" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d={d} stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+// Inline source switcher: ‹ label ›. Buttons are accent-colored on hover.
+function SourceSwitcher({ source, onPrev, onNext }) {
+  return (
+    <div className="flex items-center gap-0.5 rounded-full border border-ops-border bg-ops-panel-2/60 px-1 py-0.5">
+      <button
+        type="button"
+        onClick={onPrev}
+        aria-label="Previous source"
+        className="rounded-full p-0.5 text-ops-muted transition-colors hover:text-accent"
+      >
+        <Chevron dir="left" />
+      </button>
+      <span className="min-w-[68px] text-center text-[11px] font-semibold text-ops-text">
+        {source}
+      </span>
+      <button
+        type="button"
+        onClick={onNext}
+        aria-label="Next source"
+        className="rounded-full p-0.5 text-ops-muted transition-colors hover:text-accent"
+      >
+        <Chevron dir="right" />
+      </button>
+    </div>
+  );
+}
+
 function MacroCard({
   title,
   leftLabel,
@@ -37,6 +74,10 @@ function MacroCard({
   leftColor,
   rightColor,
   lastUpdated,
+  // Optional multi-source controls; omitted for single-source cards.
+  source,
+  onPrev,
+  onNext,
 }) {
   const leftLeads = leftValue >= rightValue;
   return (
@@ -78,36 +119,49 @@ function MacroCard({
         rightColor={rightColor}
       />
 
-      <p className="text-[10px] uppercase tracking-wide text-ops-muted/70">
-        Updated {formatUpdated(lastUpdated)}
-      </p>
+      <div className="mt-auto flex items-center justify-between gap-2 pt-1">
+        {source ? (
+          <SourceSwitcher source={source} onPrev={onPrev} onNext={onNext} />
+        ) : (
+          <span />
+        )}
+        <p className="text-[10px] uppercase tracking-wide text-ops-muted/70">
+          Updated {formatUpdated(lastUpdated)}
+        </p>
+      </div>
     </div>
+  );
+}
+
+// Wraps MacroCard with source-cycling state for multi-source control markets.
+function MarketCard({ title, data, leftLabel, rightLabel }) {
+  const sources = data.sources;
+  const [index, setIndex] = useState(0);
+  const current = sources[index];
+  const multi = sources.length > 1;
+
+  return (
+    <MacroCard
+      title={title}
+      leftLabel={leftLabel}
+      rightLabel={rightLabel}
+      leftValue={current.dem}
+      rightValue={current.rep}
+      leftColor={DEM}
+      rightColor={REP}
+      lastUpdated={current.lastUpdated}
+      source={current.label}
+      onPrev={multi ? () => setIndex((i) => (i - 1 + sources.length) % sources.length) : undefined}
+      onNext={multi ? () => setIndex((i) => (i + 1) % sources.length) : undefined}
+    />
   );
 }
 
 export default function MacroMetrics() {
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-      <MacroCard
-        title="Senate Control"
-        leftLabel="DEM"
-        rightLabel="GOP"
-        leftValue={senateControl.dem}
-        rightValue={senateControl.rep}
-        leftColor={DEM}
-        rightColor={REP}
-        lastUpdated={senateControl.lastUpdated}
-      />
-      <MacroCard
-        title="House Control"
-        leftLabel="DEM"
-        rightLabel="GOP"
-        leftValue={houseControl.dem}
-        rightValue={houseControl.rep}
-        leftColor={DEM}
-        rightColor={REP}
-        lastUpdated={houseControl.lastUpdated}
-      />
+      <MarketCard title="Senate Control" data={senateControl} leftLabel="DEM" rightLabel="GOP" />
+      <MarketCard title="House Control" data={houseControl} leftLabel="DEM" rightLabel="GOP" />
       <MacroCard
         title="Generic Ballot"
         leftLabel="DEM"
