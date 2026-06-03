@@ -31,7 +31,7 @@ export default function USMap({ onSelectRace }) {
       <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-sm font-semibold uppercase tracking-wider text-ops-text">
-            Battleground Map
+            Senate Battleground Map
           </h2>
           <p className="text-xs text-ops-muted">
             {Object.keys(CATEGORIES).length} categories · click a highlighted state for detail
@@ -119,6 +119,12 @@ export default function USMap({ onSelectRace }) {
           </div>
         )}
       </div>
+
+      <p className="mt-3 text-center text-xs text-ops-muted">
+        Democrats need to win{" "}
+        <span className="font-semibold text-ops-text">6 of these 9 states</span>{" "}
+        to take control of the Senate.
+      </p>
     </div>
   );
 }

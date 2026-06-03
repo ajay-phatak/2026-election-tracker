@@ -37,8 +37,8 @@ export const CONTROL_MARKETS = {
 
 // Dark-blue -> light-blue gradient across the difficulty spectrum (easier to scan).
 export const CATEGORIES = {
-  must_keep:  { label: "Must Keep",  color: "#1d4ed8" },
-  easy_flip:  { label: "Easy Flip",  color: "#3b82f6" },
+  must_keep:  { label: "Must Keep",  color: "#1e3a8a" },
+  easy_flip:  { label: "Easy Flip",  color: "#2563eb" },
   hard_flip:  { label: "Hard Flip",  color: "#60a5fa" },
-  dream_flip: { label: "Dream Flip", color: "#93c5fd" },
+  dream_flip: { label: "Dream Flip", color: "#bfdbfe" },
 }

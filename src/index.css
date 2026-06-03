@@ -2,9 +2,9 @@
 
 /* ---- Theme tokens (Tailwind v4 CSS-first config) ---- */
 @theme {
-  --color-ops-bg: #0a0e17;
-  --color-ops-panel: #111726;
-  --color-ops-panel-2: #161d2e;
+  --color-ops-bg: #05070d;
+  --color-ops-panel: #0c111c;
+  --color-ops-panel-2: #111726;
   --color-ops-border: #1f2738;
   --color-ops-muted: #8a97ac;
   --color-ops-text: #e6ebf3;
