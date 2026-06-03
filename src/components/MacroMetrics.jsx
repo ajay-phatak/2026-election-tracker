@@ -1,4 +1,9 @@
-import { senateControl, houseControl, trumpApproval } from "../mocks/macroMetrics";
+import {
+  senateControl,
+  houseControl,
+  genericBallot,
+  trumpApproval,
+} from "../mocks/macroMetrics";
 import { formatUpdated } from "../lib/format";
 
 const DEM = "#2563eb";
@@ -6,7 +11,9 @@ const REP = "#dc2626";
 const APPROVE = "#16a34a";
 const DISAPPROVE = "#dc2626";
 
-function SplitBar({ leftPct, leftColor, rightColor }) {
+function SplitBar({ leftPct, rightPct, leftColor, rightColor }) {
+  // Segments are sized to their actual values; any remainder (e.g. undecideds on
+  // the generic ballot) shows through as the neutral track.
   return (
     <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-ops-border">
       <div
@@ -14,8 +21,8 @@ function SplitBar({ leftPct, leftColor, rightColor }) {
         style={{ width: `${leftPct}%`, backgroundColor: leftColor }}
       />
       <div
-        className="h-full flex-1 transition-all duration-500"
-        style={{ backgroundColor: rightColor }}
+        className="ml-auto h-full transition-all duration-500"
+        style={{ width: `${rightPct}%`, backgroundColor: rightColor }}
       />
     </div>
   );
@@ -64,7 +71,12 @@ function MacroCard({
         </div>
       </div>
 
-      <SplitBar leftPct={leftValue} leftColor={leftColor} rightColor={rightColor} />
+      <SplitBar
+        leftPct={leftValue}
+        rightPct={rightValue}
+        leftColor={leftColor}
+        rightColor={rightColor}
+      />
 
       <p className="text-[10px] uppercase tracking-wide text-ops-muted/70">
         Updated {formatUpdated(lastUpdated)}
@@ -75,7 +87,7 @@ function MacroCard({
 
 export default function MacroMetrics() {
   return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <MacroCard
         title="Senate Control"
         leftLabel="DEM"
@@ -95,6 +107,16 @@ export default function MacroMetrics() {
         leftColor={DEM}
         rightColor={REP}
         lastUpdated={houseControl.lastUpdated}
+      />
+      <MacroCard
+        title="Generic Ballot"
+        leftLabel="DEM"
+        rightLabel="GOP"
+        leftValue={genericBallot.dem}
+        rightValue={genericBallot.rep}
+        leftColor={DEM}
+        rightColor={REP}
+        lastUpdated={genericBallot.lastUpdated}
       />
       <MacroCard
         title="Trump Approval"

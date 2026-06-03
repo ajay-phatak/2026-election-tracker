@@ -16,6 +16,14 @@ export const houseControl = {
   lastUpdated: "2026-06-03T13:45:00Z",
 };
 
+// TODO(api): replace with a generic-congressional-ballot polling-average API (e.g. 538 / RCP).
+// dem/rep are vote-share percentages for "which party's candidate for Congress would you support".
+export const genericBallot = {
+  dem: 47,
+  rep: 44,
+  lastUpdated: "2026-06-03T13:45:00Z",
+};
+
 // TODO(api): replace with a poll-aggregator approval API (e.g. 538 / RCP / Silver Bulletin).
 export const trumpApproval = {
   approve: 43,
