@@ -1,4 +1,4 @@
-# 2026 Senate War Room
+# 2026 Midterm Elections Tracker
 
 A polished, dark-themed dashboard tracking the 2026 US Senate midterm battleground races —
 betting markets, polling averages, and Trump approval at a glance.
