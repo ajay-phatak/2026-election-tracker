@@ -1,6 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
-  ResponsiveContainer,
   LineChart,
   Line,
   XAxis,
@@ -11,9 +10,9 @@ import {
 } from "recharts";
 import { CATEGORIES } from "../config/races.config";
 import { getRaceByStateCode } from "../lib/races";
-import { pollingByState } from "../mocks/polling";
-import { oddsByState } from "../mocks/bettingOdds";
-import { formatShortDate, formatUpdated } from "../lib/format";
+import { fetchRaceOdds, fetchRaceHistory, sourceHasData } from "../lib/api";
+import OverlapBar, { overlapInfo } from "./OverlapBar";
+import { formatUpdated } from "../lib/format";
 
 const DEM = "#2563eb";
 const REP = "#dc2626";
@@ -51,11 +50,19 @@ function EmptyNote() {
   );
 }
 
-function ChartTooltip({ active, payload, label }) {
+// ---- historical odds chart ---------------------------------------------
+
+function formatTs(t) {
+  return new Date(t * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function HistoryTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null;
   return (
     <div className="rounded-md border border-ops-border bg-ops-panel px-3 py-2 text-xs shadow-lg tabular">
-      <div className="mb-1 font-semibold text-ops-text">{formatShortDate(label)}</div>
+      <div className="mb-1 font-semibold text-ops-text">
+        {new Date(label * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+      </div>
       {payload.map((p) => (
         <div key={p.dataKey} style={{ color: p.color }}>
           {p.dataKey === "dem" ? "Dem" : "Rep"}: {p.value}%
@@ -65,70 +72,118 @@ function ChartTooltip({ active, payload, label }) {
   );
 }
 
-function PollingChart({ data }) {
+// Measure the container ourselves (ResizeObserver) and feed recharts an explicit
+// pixel width. Avoids ResponsiveContainer's flaky 0-width measurement when the
+// chart mounts inside the off-screen slide-in drawer.
+function useElementWidth() {
+  const ref = useRef(null);
+  const [width, setWidth] = useState(0);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => setWidth(el.getBoundingClientRect().width);
+    measure(); // synchronous initial measurement (post-layout, pre-paint)
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, width];
+}
+
+function HistoryChart({ data }) {
+  const [ref, width] = useElementWidth();
   return (
-    <div className="h-56 w-full">
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data} margin={{ top: 5, right: 8, bottom: 0, left: -18 }}>
+    <div ref={ref} className="h-56 w-full">
+      {width > 0 && (
+        <LineChart width={width} height={224} data={data} margin={{ top: 5, right: 10, bottom: 0, left: -8 }}>
           <CartesianGrid stroke="#1f2738" strokeDasharray="3 3" vertical={false} />
           <XAxis
-            dataKey="date"
-            tickFormatter={formatShortDate}
+            dataKey="t"
+            tickFormatter={formatTs}
             tick={{ fill: "#8a97ac", fontSize: 11 }}
             stroke="#1f2738"
+            minTickGap={48}
           />
           <YAxis
-            domain={[40, 55]}
+            domain={[0, 100]}
             tick={{ fill: "#8a97ac", fontSize: 11 }}
             stroke="#1f2738"
             tickFormatter={(v) => `${v}%`}
+            width={40}
           />
-          <Tooltip content={<ChartTooltip />} />
+          <Tooltip content={<HistoryTooltip />} />
           <Legend
             iconType="plainline"
             wrapperStyle={{ fontSize: 12, color: "#8a97ac" }}
             formatter={(value) => (value === "dem" ? "Democrat" : "Republican")}
           />
-          <Line
-            type="monotone"
-            dataKey="dem"
-            stroke={DEM}
-            strokeWidth={2.5}
-            dot={{ r: 3 }}
-            activeDot={{ r: 5 }}
-          />
-          <Line
-            type="monotone"
-            dataKey="rep"
-            stroke={REP}
-            strokeWidth={2.5}
-            dot={{ r: 3 }}
-            activeDot={{ r: 5 }}
-          />
+          <Line type="monotone" dataKey="dem" stroke={DEM} strokeWidth={2} dot={false} connectNulls />
+          <Line type="monotone" dataKey="rep" stroke={REP} strokeWidth={2} dot={false} connectNulls />
         </LineChart>
-      </ResponsiveContainer>
+      )}
     </div>
   );
 }
 
-function OddsCard({ source, demWinProb }) {
-  const repWinProb = 100 - demWinProb;
+// ---- current odds card (click to expand history) -----------------------
+
+function ProviderOdds({ source, expanded, onToggle }) {
+  const has = sourceHasData(source);
+  const band = has ? overlapInfo(source.demYes, source.repYes) : null;
+  const Tag = has ? "button" : "div";
   return (
-    <div className="flex-1 rounded-lg border border-ops-border bg-ops-panel-2/60 p-3">
-      <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ops-muted">
-        {source}
-      </div>
-      <div className="tabular">
-        <span className="text-2xl font-bold" style={{ color: DEM }}>
-          {demWinProb}%
+    <Tag
+      type={has ? "button" : undefined}
+      onClick={has ? onToggle : undefined}
+      aria-expanded={has ? expanded : undefined}
+      className={`flex-1 rounded-lg border p-3 text-left transition-colors ${
+        expanded ? "border-accent bg-ops-panel-2" : "border-ops-border bg-ops-panel-2/60"
+      } ${has ? "cursor-pointer hover:border-accent/60" : ""}`}
+    >
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-ops-muted">
+          {source.label}
         </span>
-        <span className="ml-1 text-xs text-ops-muted">Dem win</span>
+        {band && (
+          <span className="text-[10px] font-medium" style={{ color: band.color }}>
+            {band.text}
+          </span>
+        )}
       </div>
-      <div className="mt-2 flex h-1.5 w-full overflow-hidden rounded-full bg-ops-border">
-        <div style={{ width: `${demWinProb}%`, backgroundColor: DEM }} />
-        <div style={{ width: `${repWinProb}%`, backgroundColor: REP }} />
-      </div>
-    </div>
+      {has ? (
+        <>
+          <div className="mb-2 flex items-baseline justify-between tabular">
+            <span>
+              <span className="text-2xl font-bold" style={{ color: DEM }}>
+                {source.demYes}%
+              </span>
+              <span className="ml-1 text-[11px] text-ops-muted">Dem</span>
+            </span>
+            <span>
+              <span className="text-lg font-bold" style={{ color: REP }}>
+                {source.repYes}%
+              </span>
+              <span className="ml-1 text-[11px] text-ops-muted">Rep</span>
+            </span>
+          </div>
+          <OverlapBar demYes={source.demYes} repYes={source.repYes} />
+          <div className="mt-2 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent">
+            <svg
+              width="10"
+              height="10"
+              viewBox="0 0 10 10"
+              fill="none"
+              className={`transition-transform ${expanded ? "rotate-180" : ""}`}
+            >
+              <path d="M2 3.5L5 6.5l3-3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            {expanded ? "Hide history" : "View history"}
+          </div>
+        </>
+      ) : (
+        <div className="py-4 text-center text-xs text-ops-muted">No data yet</div>
+      )}
+    </Tag>
   );
 }
 
@@ -148,10 +203,41 @@ export default function RaceDrawer({ stateCode, onClose }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
+  // Live betting odds + historical series for the selected race.
+  const [odds, setOdds] = useState(null);
+  const [oddsStatus, setOddsStatus] = useState("loading"); // loading | ok | error
+  const [history, setHistory] = useState(null);
+  const [historyStatus, setHistoryStatus] = useState("loading");
+  const [expandedSource, setExpandedSource] = useState(null);
+
+  useEffect(() => {
+    if (!activeCode) return;
+    let alive = true;
+    setOddsStatus("loading");
+    setOdds(null);
+    setHistoryStatus("loading");
+    setHistory(null);
+    setExpandedSource(null);
+    fetchRaceOdds(activeCode)
+      .then((d) => alive && (setOdds(d), setOddsStatus("ok")))
+      .catch(() => alive && setOddsStatus("error"));
+    fetchRaceHistory(activeCode)
+      .then((d) => alive && (setHistory(d), setHistoryStatus("ok")))
+      .catch(() => alive && setHistoryStatus("error"));
+    return () => {
+      alive = false;
+    };
+  }, [activeCode]);
+
   const race = activeCode ? getRaceByStateCode(activeCode) : null;
-  const polls = activeCode ? pollingByState[activeCode] : null;
-  const odds = activeCode ? oddsByState[activeCode] : null;
   const category = race ? CATEGORIES[race.category] : null;
+  const oddsSources = odds?.sources || [];
+  const anyOdds = oddsSources.some(sourceHasData);
+  const oddsUpdated = oddsSources.find(sourceHasData)?.lastUpdated;
+  const expandedHistory = expandedSource
+    ? (history?.sources || []).find((s) => s.id === expandedSource)
+    : null;
+  const expandedLabel = oddsSources.find((s) => s.id === expandedSource)?.label;
 
   return (
     <>
@@ -208,26 +294,69 @@ export default function RaceDrawer({ stateCode, onClose }) {
               </button>
             </div>
 
-            {/* Polling */}
-            <Section title="Polling Average — D vs R">
-              {polls?.length ? <PollingChart data={polls} /> : <EmptyNote />}
-            </Section>
-
-            {/* Betting Odds */}
-            <Section title="Betting Odds — Dem Win Probability">
-              {odds ? (
-                <>
-                  <div className="flex gap-3">
-                    <OddsCard source="Kalshi" demWinProb={odds.kalshi.demWinProb} />
-                    <OddsCard source="Polymarket" demWinProb={odds.polymarket.demWinProb} />
-                  </div>
-                  <p className="mt-2 text-[10px] uppercase tracking-wide text-ops-muted/70">
-                    Updated {formatUpdated(odds.lastUpdated)}
-                  </p>
-                </>
-              ) : (
-                <EmptyNote />
+            {/* Betting Odds — current, two-sided; click a provider for its history */}
+            <Section title="Betting Odds — Win Probability">
+              {oddsStatus === "loading" && (
+                <div className="flex gap-3">
+                  <div className="h-28 flex-1 animate-pulse rounded-lg bg-ops-panel-2/60" />
+                  <div className="h-28 flex-1 animate-pulse rounded-lg bg-ops-panel-2/60" />
+                </div>
               )}
+              {oddsStatus === "error" && (
+                <div className="rounded-lg border border-dashed border-ops-border bg-ops-panel-2/50 px-4 py-6 text-center text-sm text-ops-muted">
+                  Couldn’t load market odds.
+                </div>
+              )}
+              {oddsStatus === "ok" &&
+                (anyOdds ? (
+                  <>
+                    <div className="flex items-stretch gap-3">
+                      {oddsSources.map((s) => (
+                        <ProviderOdds
+                          key={s.id}
+                          source={s}
+                          expanded={expandedSource === s.id}
+                          onToggle={() =>
+                            setExpandedSource((cur) => (cur === s.id ? null : s.id))
+                          }
+                        />
+                      ))}
+                    </div>
+
+                    {/* Expanded historical chart */}
+                    {expandedSource && (
+                      <div className="mt-3 rounded-lg border border-ops-border bg-ops-panel-2/40 p-3">
+                        <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ops-muted">
+                          {expandedLabel} · win probability over time
+                        </div>
+                        {historyStatus === "loading" && (
+                          <div className="h-56 animate-pulse rounded bg-ops-panel-2/60" />
+                        )}
+                        {historyStatus === "error" && (
+                          <div className="py-8 text-center text-xs text-ops-muted">
+                            Couldn’t load history.
+                          </div>
+                        )}
+                        {historyStatus === "ok" &&
+                          (expandedHistory?.hasData ? (
+                            <HistoryChart data={expandedHistory.points} />
+                          ) : (
+                            <div className="py-8 text-center text-xs text-ops-muted">
+                              No history yet
+                            </div>
+                          ))}
+                      </div>
+                    )}
+
+                    {oddsUpdated && (
+                      <p className="mt-2 text-[10px] uppercase tracking-wide text-ops-muted/70">
+                        Updated {formatUpdated(oddsUpdated)}
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <EmptyNote />
+                ))}
             </Section>
 
             {/* Notes — hidden entirely when empty */}
