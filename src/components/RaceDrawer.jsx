@@ -1,18 +1,15 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-} from "recharts";
+import { useEffect, useState } from "react";
 import { CATEGORIES } from "../config/races.config";
 import { getRaceByStateCode } from "../lib/races";
-import { fetchRaceOdds, fetchRaceHistory, sourceHasData } from "../lib/api";
+import { fetchRaceOdds, fetchRaceHistory, fetchRacePolls, sourceHasData } from "../lib/api";
 import OverlapBar, { overlapInfo } from "./OverlapBar";
+import TrendChart from "./TrendChart";
 import { formatUpdated } from "../lib/format";
+
+const POLL_SERIES = [
+  { key: "dem", color: "#2563eb", label: "Democrat" },
+  { key: "rep", color: "#dc2626", label: "Republican" },
+];
 
 const DEM = "#2563eb";
 const REP = "#dc2626";
@@ -46,81 +43,6 @@ function EmptyNote() {
   return (
     <div className="rounded-lg border border-dashed border-ops-border bg-ops-panel-2/50 px-4 py-6 text-center text-sm text-ops-muted">
       {EMPTY_MSG}
-    </div>
-  );
-}
-
-// ---- historical odds chart ---------------------------------------------
-
-function formatTs(t) {
-  return new Date(t * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
-function HistoryTooltip({ active, payload, label }) {
-  if (!active || !payload?.length) return null;
-  return (
-    <div className="rounded-md border border-ops-border bg-ops-panel px-3 py-2 text-xs shadow-lg tabular">
-      <div className="mb-1 font-semibold text-ops-text">
-        {new Date(label * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
-      </div>
-      {payload.map((p) => (
-        <div key={p.dataKey} style={{ color: p.color }}>
-          {p.dataKey === "dem" ? "Dem" : "Rep"}: {p.value}%
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// Measure the container ourselves (ResizeObserver) and feed recharts an explicit
-// pixel width. Avoids ResponsiveContainer's flaky 0-width measurement when the
-// chart mounts inside the off-screen slide-in drawer.
-function useElementWidth() {
-  const ref = useRef(null);
-  const [width, setWidth] = useState(0);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const measure = () => setWidth(el.getBoundingClientRect().width);
-    measure(); // synchronous initial measurement (post-layout, pre-paint)
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  return [ref, width];
-}
-
-function HistoryChart({ data }) {
-  const [ref, width] = useElementWidth();
-  return (
-    <div ref={ref} className="h-56 w-full">
-      {width > 0 && (
-        <LineChart width={width} height={224} data={data} margin={{ top: 5, right: 10, bottom: 0, left: -8 }}>
-          <CartesianGrid stroke="#1f2738" strokeDasharray="3 3" vertical={false} />
-          <XAxis
-            dataKey="t"
-            tickFormatter={formatTs}
-            tick={{ fill: "#8a97ac", fontSize: 11 }}
-            stroke="#1f2738"
-            minTickGap={48}
-          />
-          <YAxis
-            domain={[0, 100]}
-            tick={{ fill: "#8a97ac", fontSize: 11 }}
-            stroke="#1f2738"
-            tickFormatter={(v) => `${v}%`}
-            width={40}
-          />
-          <Tooltip content={<HistoryTooltip />} />
-          <Legend
-            iconType="plainline"
-            wrapperStyle={{ fontSize: 12, color: "#8a97ac" }}
-            formatter={(value) => (value === "dem" ? "Democrat" : "Republican")}
-          />
-          <Line type="monotone" dataKey="dem" stroke={DEM} strokeWidth={2} dot={false} connectNulls />
-          <Line type="monotone" dataKey="rep" stroke={REP} strokeWidth={2} dot={false} connectNulls />
-        </LineChart>
-      )}
     </div>
   );
 }
@@ -209,6 +131,8 @@ export default function RaceDrawer({ stateCode, onClose }) {
   const [history, setHistory] = useState(null);
   const [historyStatus, setHistoryStatus] = useState("loading");
   const [expandedSource, setExpandedSource] = useState(null);
+  const [polls, setPolls] = useState(null);
+  const [pollsStatus, setPollsStatus] = useState("loading");
 
   useEffect(() => {
     if (!activeCode) return;
@@ -218,12 +142,17 @@ export default function RaceDrawer({ stateCode, onClose }) {
     setHistoryStatus("loading");
     setHistory(null);
     setExpandedSource(null);
+    setPollsStatus("loading");
+    setPolls(null);
     fetchRaceOdds(activeCode)
       .then((d) => alive && (setOdds(d), setOddsStatus("ok")))
       .catch(() => alive && setOddsStatus("error"));
     fetchRaceHistory(activeCode)
       .then((d) => alive && (setHistory(d), setHistoryStatus("ok")))
       .catch(() => alive && setHistoryStatus("error"));
+    fetchRacePolls(activeCode)
+      .then((d) => alive && (setPolls(d), setPollsStatus("ok")))
+      .catch(() => alive && setPollsStatus("error"));
     return () => {
       alive = false;
     };
@@ -339,7 +268,7 @@ export default function RaceDrawer({ stateCode, onClose }) {
                         )}
                         {historyStatus === "ok" &&
                           (expandedHistory?.hasData ? (
-                            <HistoryChart data={expandedHistory.points} />
+                            <TrendChart data={expandedHistory.points} series={POLL_SERIES} />
                           ) : (
                             <div className="py-8 text-center text-xs text-ops-muted">
                               No history yet
@@ -353,6 +282,48 @@ export default function RaceDrawer({ stateCode, onClose }) {
                         Updated {formatUpdated(oddsUpdated)}
                       </p>
                     )}
+                  </>
+                ) : (
+                  <EmptyNote />
+                ))}
+            </Section>
+
+            {/* Polling Average — real VoteHub data, trend shown inline */}
+            <Section title="Polling Average — D vs R">
+              {pollsStatus === "loading" && (
+                <div className="h-56 animate-pulse rounded bg-ops-panel-2/60" />
+              )}
+              {pollsStatus === "error" && (
+                <div className="rounded-lg border border-dashed border-ops-border bg-ops-panel-2/50 px-4 py-6 text-center text-sm text-ops-muted">
+                  Couldn’t load polling.
+                </div>
+              )}
+              {pollsStatus === "ok" &&
+                (polls && polls.n > 0 ? (
+                  <>
+                    <div className="mb-2 flex items-baseline justify-between tabular">
+                      <span>
+                        <span className="text-2xl font-bold" style={{ color: DEM }}>
+                          {polls.dem ?? "—"}%
+                        </span>
+                        <span className="ml-1 text-[11px] text-ops-muted">Dem</span>
+                      </span>
+                      <span>
+                        <span className="text-2xl font-bold" style={{ color: REP }}>
+                          {polls.rep ?? "—"}%
+                        </span>
+                        <span className="ml-1 text-[11px] text-ops-muted">Rep</span>
+                      </span>
+                    </div>
+                    <OverlapBar demYes={polls.dem} repYes={polls.rep} />
+                    {polls.trend?.length > 1 && (
+                      <div className="mt-3">
+                        <TrendChart data={polls.trend} series={POLL_SERIES} />
+                      </div>
+                    )}
+                    <p className="mt-2 text-[10px] uppercase tracking-wide text-ops-muted/70">
+                      {polls.n} poll{polls.n === 1 ? "" : "s"} · updated {formatUpdated(polls.lastUpdated)}
+                    </p>
                   </>
                 ) : (
                   <EmptyNote />

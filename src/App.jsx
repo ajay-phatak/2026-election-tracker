@@ -1,10 +1,17 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import MacroMetrics from "./components/MacroMetrics";
 import USMap from "./components/USMap";
 import RaceDrawer from "./components/RaceDrawer";
+import { prefetchRaces } from "./lib/api";
+import { WATCHED_RACES } from "./config/races.config";
 
 export default function App() {
   const [selectedStateCode, setSelectedStateCode] = useState(null);
+
+  // Warm per-state odds/history/polls in the background so drawers open instantly.
+  useEffect(() => {
+    prefetchRaces(WATCHED_RACES.senate.map((r) => r.stateCode));
+  }, []);
 
   return (
     <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-5 px-4 py-5 sm:px-6 lg:px-8">
@@ -22,7 +29,7 @@ export default function App() {
           </p>
         </div>
         <div className="text-[10px] uppercase tracking-widest text-ops-muted/70">
-          Mocked data · pre-API build
+          Live data · Polymarket · Kalshi · VoteHub
         </div>
       </header>
 
