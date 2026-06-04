@@ -75,19 +75,19 @@ function ProviderOdds({ source, expanded, onToggle }) {
       </div>
       {has ? (
         <>
-          <div className="mb-2 flex items-baseline justify-between tabular">
-            <span>
-              <span className="text-2xl font-bold" style={{ color: DEM }}>
+          <div className="mb-2 flex items-end justify-between tabular">
+            <div className="flex flex-col">
+              <span className="text-xl font-bold leading-none" style={{ color: DEM }}>
                 {source.demYes}%
               </span>
-              <span className="ml-1 text-[11px] text-ops-muted">Dem</span>
-            </span>
-            <span>
-              <span className="text-lg font-bold" style={{ color: REP }}>
+              <span className="mt-1 text-[11px] font-medium text-ops-muted">Dem</span>
+            </div>
+            <div className="flex flex-col items-end">
+              <span className="text-xl font-bold leading-none" style={{ color: REP }}>
                 {source.repYes}%
               </span>
-              <span className="ml-1 text-[11px] text-ops-muted">Rep</span>
-            </span>
+              <span className="mt-1 text-[11px] font-medium text-ops-muted">Rep</span>
+            </div>
           </div>
           <OverlapBar demYes={source.demYes} repYes={source.repYes} />
           <div className="mt-2 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent">
