@@ -29,9 +29,39 @@ function toPct(x) {
 }
 
 // ---- Polymarket (Gamma) -------------------------------------------------
-// Events expose party-named sub-markets ("Democratic Party"/"Democrat",
-// "Republican Party"/"Republican"), each a Yes/No binary.
-async function polymarketBySlug(slug) {
+// Events come in two shapes:
+//   • aggregate party markets — "Will the Democrats/Republicans win…" (often
+//     with the candidate as the groupItemTitle, e.g. "Sherrod Brown (D)");
+//   • per-candidate markets — one Yes/No market per candidate with no party
+//     word at all (e.g. Alaska: "Mary Peltola", "Dan Sullivan").
+// `partyHints` ({ dem:[names], rep:[names] }, from the race's pollParties) lets
+// us classify the latter; the leading candidate represents each side.
+function marketSide(m, partyHints) {
+  const text = `${m.groupItemTitle || ""} ${m.question || ""}`.toLowerCase();
+  if (text.includes("democrat")) return "dem";
+  if (text.includes("republican")) return "rep";
+  const has = (arr) => arr?.some((n) => text.includes(String(n).toLowerCase()));
+  if (has(partyHints?.dem)) return "dem";
+  if (has(partyHints?.rep)) return "rep";
+  return null;
+}
+
+// Parse a sub-market's Yes price (0-1) or null.
+function marketYes(m) {
+  if (!m.outcomePrices) return null;
+  try {
+    const outcomes = JSON.parse(m.outcomes);
+    const prices = JSON.parse(m.outcomePrices);
+    const yesIdx = outcomes.findIndex((o) => String(o).toLowerCase() === "yes");
+    const yes = yesIdx >= 0 ? prices[yesIdx] : prices[0];
+    const n = Number(yes);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+async function polymarketBySlug(slug, partyHints) {
   if (!slug) return { demYes: null, repYes: null };
   try {
     const data = await getJson(`${PM_BASE}/events?slug=${encodeURIComponent(slug)}`);
@@ -41,23 +71,12 @@ async function polymarketBySlug(slug) {
     let demYes = null;
     let repYes = null;
     for (const m of ev.markets) {
-      if (!m.outcomePrices) continue;
-      let outcomes;
-      let prices;
-      try {
-        outcomes = JSON.parse(m.outcomes);
-        prices = JSON.parse(m.outcomePrices);
-      } catch {
-        continue;
-      }
-      const yesIdx = outcomes.findIndex((o) => String(o).toLowerCase() === "yes");
-      const yes = yesIdx >= 0 ? prices[yesIdx] : prices[0];
-      // Some events name the sub-market after the candidate ("Sherrod Brown (D)")
-      // and only mention the party in the question ("Will the Democrats win…"),
-      // so match against both fields combined.
-      const title = `${m.groupItemTitle || ""} ${m.question || ""}`.toLowerCase();
-      if (title.includes("democrat")) demYes = toPct(yes);
-      else if (title.includes("republican")) repYes = toPct(yes);
+      const yes = marketYes(m);
+      if (yes == null) continue;
+      const side = marketSide(m, partyHints);
+      // Per-candidate events have several markets per side — keep the front-runner.
+      if (side === "dem") demYes = demYes == null ? toPct(yes) : Math.max(demYes, toPct(yes));
+      else if (side === "rep") repYes = repYes == null ? toPct(yes) : Math.max(repYes, toPct(yes));
     }
     return { demYes, repYes };
   } catch {
@@ -154,10 +173,10 @@ async function kalshiCandleHistory(cfg) {
 
 // ---- Compose ------------------------------------------------------------
 // Build the two-source { polymarket, kalshi } current-odds shape.
-async function buildSourcesFrom(polymarketSlug, kalshiCfg) {
+async function buildSourcesFrom(polymarketSlug, kalshiCfg, partyHints) {
   const now = new Date().toISOString();
   const [pm, ks] = await Promise.all([
-    polymarketBySlug(polymarketSlug),
+    polymarketBySlug(polymarketSlug, partyHints),
     kalshiCandleOdds(kalshiCfg),
   ]);
   const mk = (id, label, r) => ({
@@ -181,7 +200,11 @@ export async function getControl() {
 export async function getRace(stateCode) {
   const race = WATCHED_RACES.senate.find((r) => r.stateCode === stateCode);
   if (!race) return null;
-  const { sources } = await buildSourcesFrom(race.polymarketSlug, kalshiCfgForRace(race));
+  const { sources } = await buildSourcesFrom(
+    race.polymarketSlug,
+    kalshiCfgForRace(race),
+    race.pollParties
+  );
   return { stateCode, sources };
 }
 
@@ -193,7 +216,7 @@ const num = (x) => (x == null || Number.isNaN(Number(x)) ? null : Number(x));
 
 // The Yes-token clob ids for the Democrat/Republican sub-markets of an event,
 // plus the event-level aggregate volume/liquidity (cumulative across the markets).
-async function polymarketTokens(slug) {
+async function polymarketTokens(slug, partyHints) {
   if (!slug) return { demToken: null, repToken: null, volume: null };
   try {
     const data = await getJson(`${PM_BASE}/events?slug=${encodeURIComponent(slug)}`);
@@ -201,6 +224,10 @@ async function polymarketTokens(slug) {
     if (!ev || !ev.markets) return { demToken: null, repToken: null, volume: null };
     let demToken = null;
     let repToken = null;
+    // Track the leading candidate per side so the history line follows the same
+    // market shown in the current odds (matters for per-candidate events).
+    let demYes = -1;
+    let repYes = -1;
     for (const m of ev.markets) {
       if (!m.clobTokenIds) continue;
       let ids;
@@ -209,9 +236,16 @@ async function polymarketTokens(slug) {
       } catch {
         continue;
       }
-      const title = `${m.groupItemTitle || ""} ${m.question || ""}`.toLowerCase();
-      if (title.includes("democrat")) demToken = ids[0];
-      else if (title.includes("republican")) repToken = ids[0];
+      const side = marketSide(m, partyHints);
+      if (!side) continue;
+      const yes = marketYes(m) ?? 0;
+      if (side === "dem" && yes > demYes) {
+        demYes = yes;
+        demToken = ids[0];
+      } else if (side === "rep" && yes > repYes) {
+        repYes = yes;
+        repToken = ids[0];
+      }
     }
     const volume = {
       total: num(ev.volume),
@@ -250,8 +284,8 @@ function mergeSeries(dem, rep) {
 }
 
 // Polymarket win-probability history (price line + aggregate volume; no per-point volume).
-async function polymarketEventHistory(slug) {
-  const { demToken, repToken, volume } = await polymarketTokens(slug);
+async function polymarketEventHistory(slug, partyHints) {
+  const { demToken, repToken, volume } = await polymarketTokens(slug, partyHints);
   const [dem, rep] = await Promise.all([pricesHistory(demToken), pricesHistory(repToken)]);
   const points = mergeSeries(dem, rep);
   return { points, hasData: points.length > 0, volume };
@@ -259,9 +293,9 @@ async function polymarketEventHistory(slug) {
 
 // Polymarket carries the price line (+ aggregate volume); Kalshi carries price +
 // per-day volume bars (hasVolumeSeries). Shared by control markets and state races.
-async function bothHistory(polymarketSlug, kalshiCfg) {
+async function bothHistory(polymarketSlug, kalshiCfg, partyHints) {
   const [pm, ks] = await Promise.all([
-    polymarketEventHistory(polymarketSlug),
+    polymarketEventHistory(polymarketSlug, partyHints),
     kalshiCandleHistory(kalshiCfg),
   ]);
   return {
@@ -275,7 +309,10 @@ async function bothHistory(polymarketSlug, kalshiCfg) {
 export async function getRaceHistory(stateCode) {
   const race = WATCHED_RACES.senate.find((r) => r.stateCode === stateCode);
   if (!race) return null;
-  return { stateCode, ...(await bothHistory(race.polymarketSlug, kalshiCfgForRace(race))) };
+  return {
+    stateCode,
+    ...(await bothHistory(race.polymarketSlug, kalshiCfgForRace(race), race.pollParties)),
+  };
 }
 
 export async function getControlHistory() {
