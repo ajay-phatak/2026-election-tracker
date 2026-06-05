@@ -53,6 +53,14 @@ export function fetchRaceHistory(stateCode) {
   );
 }
 
+// Recent news headlines per state: { stateCode, articles:[{title,link,source,publishedAt}], lastUpdated }
+const newsCache = new Map();
+export function fetchRaceNews(stateCode) {
+  return memoize(newsCache, stateCode, () =>
+    getJson(`/api/race-news?state=${encodeURIComponent(stateCode)}`, "race-news")
+  );
+}
+
 // Per-state senate polling is batched: one /api/race-polls fetch returns every state,
 // so we download VoteHub's full poll list once instead of per drawer open.
 let allRacePollsPromise = null;
@@ -80,6 +88,7 @@ export function prefetchRaces(stateCodes) {
   for (const sc of stateCodes) {
     fetchRaceOdds(sc).catch(() => {});
     fetchRaceHistory(sc).catch(() => {});
+    fetchRaceNews(sc).catch(() => {});
   }
 }
 

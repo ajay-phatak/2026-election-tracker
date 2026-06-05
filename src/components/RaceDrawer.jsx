@@ -1,11 +1,17 @@
 import { useEffect, useState } from "react";
 import { CATEGORIES } from "../config/races.config";
 import { getRaceByStateCode } from "../lib/races";
-import { fetchRaceOdds, fetchRaceHistory, fetchRacePolls, sourceHasData } from "../lib/api";
+import {
+  fetchRaceOdds,
+  fetchRaceHistory,
+  fetchRacePolls,
+  fetchRaceNews,
+  sourceHasData,
+} from "../lib/api";
 import OverlapBar, { overlapInfo } from "./OverlapBar";
 import TrendChart from "./TrendChart";
 import VolumeStat from "./VolumeStat";
-import { formatUpdated } from "../lib/format";
+import { formatUpdated, formatRelative } from "../lib/format";
 
 const POLL_SERIES = [
   { key: "dem", color: "#2563eb", label: "Democrat" },
@@ -45,6 +51,34 @@ function EmptyNote() {
     <div className="rounded-lg border border-dashed border-ops-border bg-ops-panel-2/50 px-4 py-6 text-center text-sm text-ops-muted">
       {EMPTY_MSG}
     </div>
+  );
+}
+
+// ---- recent news list --------------------------------------------------
+
+function NewsList({ articles }) {
+  return (
+    <ul className="flex flex-col gap-2">
+      {articles.map((a, i) => (
+        <li key={a.link || i}>
+          <a
+            href={a.link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="group block rounded-lg border border-ops-border bg-ops-panel-2/50 px-3 py-2.5 transition-colors hover:border-accent/60 hover:bg-ops-panel-2"
+          >
+            <p className="line-clamp-2 text-sm font-medium text-ops-text group-hover:text-accent">
+              {a.title}
+            </p>
+            <p className="mt-1 truncate text-[11px] text-ops-muted">
+              {a.source}
+              {a.source && a.publishedAt ? " · " : ""}
+              {formatRelative(a.publishedAt)}
+            </p>
+          </a>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -134,6 +168,8 @@ export default function RaceDrawer({ stateCode, onClose }) {
   const [expandedSource, setExpandedSource] = useState(null);
   const [polls, setPolls] = useState(null);
   const [pollsStatus, setPollsStatus] = useState("loading");
+  const [news, setNews] = useState(null);
+  const [newsStatus, setNewsStatus] = useState("loading");
 
   useEffect(() => {
     if (!activeCode) return;
@@ -145,6 +181,8 @@ export default function RaceDrawer({ stateCode, onClose }) {
     setExpandedSource(null);
     setPollsStatus("loading");
     setPolls(null);
+    setNewsStatus("loading");
+    setNews(null);
     fetchRaceOdds(activeCode)
       .then((d) => alive && (setOdds(d), setOddsStatus("ok")))
       .catch(() => alive && setOddsStatus("error"));
@@ -154,6 +192,9 @@ export default function RaceDrawer({ stateCode, onClose }) {
     fetchRacePolls(activeCode)
       .then((d) => alive && (setPolls(d), setPollsStatus("ok")))
       .catch(() => alive && setPollsStatus("error"));
+    fetchRaceNews(activeCode)
+      .then((d) => alive && (setNews(d), setNewsStatus("ok")))
+      .catch(() => alive && setNewsStatus("error"));
     return () => {
       alive = false;
     };
@@ -333,6 +374,33 @@ export default function RaceDrawer({ stateCode, onClose }) {
                     )}
                     <p className="mt-2 text-[10px] uppercase tracking-wide text-ops-muted/70">
                       {polls.n} poll{polls.n === 1 ? "" : "s"} · updated {formatUpdated(polls.lastUpdated)}
+                    </p>
+                  </>
+                ) : (
+                  <EmptyNote />
+                ))}
+            </Section>
+
+            {/* Recent News — free Google News RSS headlines for this race */}
+            <Section title="Recent News">
+              {newsStatus === "loading" && (
+                <div className="flex flex-col gap-2">
+                  <div className="h-14 animate-pulse rounded-lg bg-ops-panel-2/60" />
+                  <div className="h-14 animate-pulse rounded-lg bg-ops-panel-2/60" />
+                  <div className="h-14 animate-pulse rounded-lg bg-ops-panel-2/60" />
+                </div>
+              )}
+              {newsStatus === "error" && (
+                <div className="rounded-lg border border-dashed border-ops-border bg-ops-panel-2/50 px-4 py-6 text-center text-sm text-ops-muted">
+                  Couldn’t load news.
+                </div>
+              )}
+              {newsStatus === "ok" &&
+                (news?.articles?.length ? (
+                  <>
+                    <NewsList articles={news.articles} />
+                    <p className="mt-2 text-[10px] uppercase tracking-wide text-ops-muted/70">
+                      via Google News
                     </p>
                   </>
                 ) : (
