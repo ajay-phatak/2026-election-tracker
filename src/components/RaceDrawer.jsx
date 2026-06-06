@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { CATEGORIES } from "../config/races.config";
-import { getRaceByStateCode } from "../lib/races";
+import { CATEGORIES, RATINGS } from "../config/races.config";
+import { getRaceByCode } from "../lib/races";
 import {
   fetchRaceOdds,
   fetchRaceHistory,
@@ -200,8 +200,9 @@ export default function RaceDrawer({ stateCode, onClose }) {
     };
   }, [activeCode]);
 
-  const race = activeCode ? getRaceByStateCode(activeCode) : null;
-  const category = race ? CATEGORIES[race.category] : null;
+  const race = activeCode ? getRaceByCode(activeCode) : null;
+  // Senate races carry a `category`; House districts carry a `rating`.
+  const tag = race ? (race.category ? CATEGORIES[race.category] : RATINGS[race.rating]) : null;
   const oddsSources = odds?.sources || [];
   const anyOdds = oddsSources.some(sourceHasData);
   const oddsUpdated = oddsSources.find(sourceHasData)?.lastUpdated;
@@ -236,16 +237,21 @@ export default function RaceDrawer({ stateCode, onClose }) {
             <div className="sticky top-0 z-10 flex items-start justify-between border-b border-ops-border bg-ops-panel/95 px-5 py-4 backdrop-blur">
               <div>
                 <div className="flex items-center gap-2">
-                  <h2 className="text-xl font-bold text-ops-text">{race.state}</h2>
+                  <h2 className="text-xl font-bold text-ops-text">
+                    {race.district ?? race.state}
+                  </h2>
                   <span
                     className="rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide"
-                    style={{ color: category.color, backgroundColor: `${category.color}24` }}
+                    style={{ color: tag.color, backgroundColor: `${tag.color}24` }}
                   >
-                    {category.label}
+                    {tag.label}
                   </span>
                 </div>
                 <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                  <span className="text-sm text-ops-muted">{race.incumbent}</span>
+                  <span className="text-sm text-ops-muted">
+                    {race.district ? `${race.state} · ` : ""}
+                    {race.incumbent}
+                  </span>
                   <PartyBadge party={race.party} />
                 </div>
               </div>
@@ -339,7 +345,8 @@ export default function RaceDrawer({ stateCode, onClose }) {
                 ))}
             </Section>
 
-            {/* Polling Average — real VoteHub data, trend shown inline */}
+            {/* Polling Average — Senate only (no per-district House polls fetched) */}
+            {!race.district && (
             <Section title="Polling Average — D vs R">
               {pollsStatus === "loading" && (
                 <div className="h-56 animate-pulse rounded bg-ops-panel-2/60" />
@@ -380,6 +387,7 @@ export default function RaceDrawer({ stateCode, onClose }) {
                   <EmptyNote />
                 ))}
             </Section>
+            )}
 
             {/* Recent News — free Google News RSS headlines for this race */}
             <Section title="Recent News">

@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import MacroMetrics from "./components/MacroMetrics";
 import USMap from "./components/USMap";
+import HouseSection from "./components/HouseSection";
 import RaceDrawer from "./components/RaceDrawer";
 import LoadingScreen from "./components/LoadingScreen";
 import { prefetchRaces } from "./lib/api";
 import { WATCHED_RACES } from "./config/races.config";
 
 export default function App() {
-  const [selectedStateCode, setSelectedStateCode] = useState(null);
+  const [selectedCode, setSelectedCode] = useState(null);
   const [ready, setReady] = useState(false);
 
   const handleReady = useCallback(() => setReady(true), []);
@@ -45,17 +46,20 @@ export default function App() {
       <MacroMetrics onReady={handleReady} />
 
       {/* Map centerpiece */}
-      <main className="min-h-[480px] flex-1 rounded-2xl border border-ops-border bg-ops-panel/40 p-4 sm:p-5">
-        <USMap onSelectRace={setSelectedStateCode} />
+      <main className="min-h-[480px] rounded-2xl border border-ops-border bg-ops-panel/40 p-4 sm:p-5">
+        <USMap onSelectRace={setSelectedCode} />
       </main>
+
+      {/* House — overview + competitive-district watchlist */}
+      <HouseSection onSelectRace={setSelectedCode} />
 
       <footer className="text-center text-[10px] uppercase tracking-widest text-ops-muted/50">
         For reference only · not affiliated with any campaign
       </footer>
 
       <RaceDrawer
-        stateCode={selectedStateCode}
-        onClose={() => setSelectedStateCode(null)}
+        stateCode={selectedCode}
+        onClose={() => setSelectedCode(null)}
       />
     </div>
   );

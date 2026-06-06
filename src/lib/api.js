@@ -61,6 +61,19 @@ export function fetchRaceNews(stateCode) {
   );
 }
 
+// Current odds for every watched House district, batched into one request:
+// { "CA-41": { code, sources:[...] }, ... }
+let houseRacesPromise = null;
+export function fetchHouseRaces() {
+  if (!houseRacesPromise) {
+    houseRacesPromise = getJson("/api/house-races", "house-races").catch((e) => {
+      houseRacesPromise = null;
+      throw e;
+    });
+  }
+  return houseRacesPromise;
+}
+
 // Per-state senate polling is batched: one /api/race-polls fetch returns every state,
 // so we download VoteHub's full poll list once instead of per drawer open.
 let allRacePollsPromise = null;
@@ -85,6 +98,7 @@ export async function fetchRacePolls(stateCode) {
 // Warm the caches in the background on app load so drawers open instantly.
 export function prefetchRaces(stateCodes) {
   fetchAllRacePolls().catch(() => {});
+  fetchHouseRaces().catch(() => {});
   for (const sc of stateCodes) {
     fetchRaceOdds(sc).catch(() => {});
     fetchRaceHistory(sc).catch(() => {});

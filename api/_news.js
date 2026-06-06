@@ -65,24 +65,46 @@ function parseRss(xml, stateName) {
     .filter((a) => a.title && a.link)
     .sort((a, b) => b.rel - a.rel || (b.publishedAt || "").localeCompare(a.publishedAt || ""))
     .slice(0, MAX_ARTICLES)
-    .map(({ rel, ...a }) => a);
+    .map((a) => ({ title: a.title, link: a.link, source: a.source, publishedAt: a.publishedAt }));
 }
 
-export async function getRaceNews(stateCode) {
-  const race = WATCHED_RACES.senate.find((r) => r.stateCode === stateCode);
+function ordinal(n) {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return `${n}${s[(v - 20) % 10] || s[v] || s[0]}`;
+}
+
+// Build the Google News query + the relevance term (titles containing it rank first).
+// Senate quotes "<State> Senate race"; House quotes the incumbent (or, for open
+// seats, the "<State> <Nth> district" phrase) — verified to return district-specific news.
+function newsConfig(race) {
+  if (!race.district) {
+    return { query: `"${race.state} Senate race" 2026`, rel: race.state };
+  }
+  const hasName = race.incumbent && !/open/i.test(race.incumbent);
+  if (hasName) {
+    const surname = race.incumbent.split(" ").pop();
+    return { query: `"${race.incumbent}" ${race.state} House 2026`, rel: surname };
+  }
+  const num = Number(race.district.split("-")[1]);
+  return { query: `"${race.state} ${ordinal(num)} district" House 2026`, rel: race.state };
+}
+
+export async function getRaceNews(code) {
+  const race = [...WATCHED_RACES.senate, ...(WATCHED_RACES.house || [])].find(
+    (r) => (r.code ?? r.stateCode) === code
+  );
   if (!race) return null;
 
-  const empty = { stateCode, articles: [], lastUpdated: null };
+  const empty = { stateCode: code, articles: [], lastUpdated: null };
   try {
-    // Quote the "<State> Senate race" phrase so Google enforces the state and the
-    // federal race (avoids generic cross-state "Latest Polls" and state-legislature noise).
-    const query = `"${race.state} Senate race" 2026`;
+    const { query, rel } = newsConfig(race);
     const url = `${GNEWS}?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`;
     const r = await fetch(url, { headers: { "User-Agent": UA } });
     if (!r.ok) return empty;
-    const articles = parseRss(await r.text(), race.state);
+    const articles = parseRss(await r.text(), rel);
     return {
-      stateCode,
+      stateCode: code,
       articles,
       lastUpdated: articles.length ? new Date().toISOString() : null,
     };

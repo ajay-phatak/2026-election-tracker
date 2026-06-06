@@ -11,6 +11,16 @@
 
 import { WATCHED_RACES, CONTROL_MARKETS } from "../src/config/races.config.js";
 
+// Resolve a watched race (senate or house) by its unique code. Senate races key
+// on stateCode (GA), house races on code (CA-41).
+function findRace(code) {
+  return (
+    [...WATCHED_RACES.senate, ...(WATCHED_RACES.house || [])].find(
+      (r) => (r.code ?? r.stateCode) === code
+    ) || null
+  );
+}
+
 const PM_BASE = "https://gamma-api.polymarket.com";
 // Polymarket 403s requests without a UA header.
 const UA = "2026-election-tracker/1.0 (dashboard)";
@@ -198,7 +208,7 @@ export async function getControl() {
 }
 
 export async function getRace(stateCode) {
-  const race = WATCHED_RACES.senate.find((r) => r.stateCode === stateCode);
+  const race = findRace(stateCode);
   if (!race) return null;
   const { sources } = await buildSourcesFrom(
     race.polymarketSlug,
@@ -206,6 +216,20 @@ export async function getRace(stateCode) {
     race.pollParties
   );
   return { stateCode, sources };
+}
+
+// Batched current odds for every watched House district -> { "CA-41": { sources }, ... }.
+// One client fetch fans out here (mirrors getAllRacePolls), Polymarket-only since
+// House districts have no liquid Kalshi markets.
+export async function getAllHouseRaces() {
+  const races = WATCHED_RACES.house || [];
+  const entries = await Promise.all(
+    races.map(async (race) => {
+      const { sources } = await buildSourcesFrom(race.polymarketSlug, null, race.pollParties);
+      return [race.code, { code: race.code, sources }];
+    })
+  );
+  return Object.fromEntries(entries);
 }
 
 // ---- Historical odds (time-series) -------------------------------------
@@ -307,7 +331,7 @@ async function bothHistory(polymarketSlug, kalshiCfg, partyHints) {
 }
 
 export async function getRaceHistory(stateCode) {
-  const race = WATCHED_RACES.senate.find((r) => r.stateCode === stateCode);
+  const race = findRace(stateCode);
   if (!race) return null;
   return {
     stateCode,
