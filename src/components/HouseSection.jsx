@@ -60,6 +60,7 @@ function SeatsBar() {
       <p className="mt-2 text-xs text-ops-muted">
         Democrats need a net{" "}
         <span className="font-semibold text-ops-text">+{needed} seats</span> to take the House
+        {current.ind ? ` · ${current.ind} independent` : ""}
         {current.vacant ? ` · ${current.vacant} vacant` : ""}.
       </p>
     </div>
@@ -183,7 +184,7 @@ function Watchlist({ odds, onSelectRace }) {
         </table>
       </div>
       <p className="mt-2 text-[10px] uppercase tracking-wide text-ops-muted/60">
-        Ratings hand-curated · market odds via Polymarket where available
+        Ratings: {HOUSE_OUTLOOK.source} · {HOUSE_OUTLOOK.asOf} · market odds via Polymarket
       </p>
     </div>
   );
