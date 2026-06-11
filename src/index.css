@@ -41,34 +41,16 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---- Map glow / pulse for watched states ---- */
-@keyframes watched-pulse {
-  0%,
-  100% {
-    opacity: 0.92;
-    filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.12));
-  }
-  50% {
-    opacity: 1;
-    filter: drop-shadow(0 0 7px rgba(255, 255, 255, 0.32));
-  }
-}
-
+/* ---- Watched states: static glow, brighter on hover ---- */
 .watched-state {
-  animation: watched-pulse 3.2s ease-in-out infinite;
   cursor: pointer;
+  filter: drop-shadow(0 0 3px rgba(255, 255, 255, 0.18));
   transition: filter 0.2s ease;
   outline: none;
 }
 
 .watched-state:hover {
   filter: drop-shadow(0 0 9px rgba(255, 255, 255, 0.6)) brightness(1.12);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .watched-state {
-    animation: none;
-  }
 }
 
 /* Indeterminate progress bar on the initial loading screen */
