@@ -67,27 +67,28 @@ function SeatsBar() {
   );
 }
 
-// ---- Ratings rollup (path to 218) --------------------------------------
+// ---- Rollup bars (path to 218) ------------------------------------------
 
-function RatingsRollup() {
-  const { ratings, total, majority } = HOUSE_OUTLOOK;
+// Shared 435-seat rollup bar: 7 rating buckets + the 218 majority line.
+function Rollup({ caption, counts, footnote }) {
+  const { total, majority } = HOUSE_OUTLOOK;
   const order = Object.keys(RATINGS); // safeD ... safeR
-  const demBase = ratings.safeD + ratings.likelyD + ratings.leanD;
-  const repBase = ratings.safeR + ratings.likelyR + ratings.leanR;
+  const demBase = counts.safeD + counts.likelyD + counts.leanD;
+  const repBase = counts.safeR + counts.likelyR + counts.leanR;
   const demNeed = Math.max(0, majority - demBase);
   const repNeed = Math.max(0, majority - repBase);
 
   return (
     <div>
       <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ops-muted">
-        All 435 seats by rating
+        {caption}
       </div>
       <div className="relative flex h-3 w-full overflow-hidden rounded-full bg-ops-border">
         {order.map((key) => (
           <div
             key={key}
-            title={`${RATINGS[key].label}: ${ratings[key]}`}
-            style={{ width: `${(ratings[key] / total) * 100}%`, backgroundColor: RATINGS[key].color }}
+            title={`${RATINGS[key].label}: ${counts[key]}`}
+            style={{ width: `${(counts[key] / total) * 100}%`, backgroundColor: RATINGS[key].color }}
           />
         ))}
         <div className="absolute top-[-2px] h-[calc(100%+4px)] w-px bg-ops-text/80" style={{ left: `${(majority / total) * 100}%` }} />
@@ -96,9 +97,67 @@ function RatingsRollup() {
         Safe/likely/lean: <span className="font-semibold" style={{ color: DEM }}>{demBase} D</span>{" "}
         · <span className="font-semibold" style={{ color: REP }}>{repBase} R</span>. To reach 218,
         Democrats need <span className="font-semibold text-ops-text">{demNeed}</span> of{" "}
-        {ratings.tossup} toss-ups (Republicans {repNeed}).
+        {counts.tossup} toss-ups (Republicans {repNeed}).
       </p>
+      {footnote && (
+        <p className="mt-1 text-[10px] uppercase tracking-wide text-ops-muted/60">{footnote}</p>
+      )}
     </div>
+  );
+}
+
+function RatingsRollup() {
+  return <Rollup caption="All 435 seats by rating" counts={HOUSE_OUTLOOK.ratings} />;
+}
+
+// Bucket a district's market favorite into a rating-equivalent by the raw D−R
+// spread. Thresholds sit in the natural gaps of the June 2026 watchlist odds
+// (|spread| clusters at ≤11, 16.5–28, 37–49.5, ≥56): under 15 toss-up, under 35
+// lean, under 55 likely, else safe. Districts without a two-sided market keep
+// their hand-curated rating.
+function marketBucket(entry) {
+  const src = entry?.sources?.find((s) => s.demYes != null && s.repYes != null);
+  if (!src) return null;
+  const spread = src.demYes - src.repYes;
+  const abs = Math.abs(spread);
+  if (abs < 15) return "tossup";
+  const band = abs < 35 ? "lean" : abs < 55 ? "likely" : "safe";
+  return `${band}${spread > 0 ? "D" : "R"}`;
+}
+
+// Same bar, but watchlist seats move to the bucket the betting market implies;
+// all other (non-competitive) seats keep their rating.
+function MarketRollup({ odds }) {
+  const counts = useMemo(() => {
+    const c = { ...HOUSE_OUTLOOK.ratings };
+    for (const d of WATCHED_RACES.house) {
+      const bucket = odds ? marketBucket(odds[d.code]) : null;
+      if (bucket && bucket !== d.rating) {
+        c[d.rating] -= 1;
+        c[bucket] += 1;
+      }
+    }
+    return c;
+  }, [odds]);
+
+  if (!odds) {
+    return (
+      <div>
+        <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ops-muted">
+          All 435 seats by market consensus
+        </div>
+        <div className="h-3 w-full animate-pulse rounded-full bg-ops-border" />
+        <div className="mt-2 h-12 animate-pulse rounded bg-ops-panel-2/60" />
+      </div>
+    );
+  }
+
+  return (
+    <Rollup
+      caption="All 435 seats by market consensus"
+      counts={counts}
+      footnote="Watchlist seats bucketed by market spread (±15/35/55) · rest keep rating"
+    />
   );
 }
 
@@ -216,9 +275,10 @@ export default function HouseSection({ onSelectRace }) {
         </p>
       </div>
 
-      <div className="grid gap-5 sm:grid-cols-2">
+      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
         <SeatsBar />
         <RatingsRollup />
+        <MarketRollup odds={odds} />
       </div>
 
       <div className="mt-6">
