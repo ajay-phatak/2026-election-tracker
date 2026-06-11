@@ -9,6 +9,7 @@ import {
   sourceHasData,
 } from "../lib/api";
 import OverlapBar, { overlapInfo } from "./OverlapBar";
+import SourceTag from "./SourceTag";
 import TrendChart from "./TrendChart";
 import VolumeStat from "./VolumeStat";
 import { formatUpdated, formatRelative } from "../lib/format";
@@ -35,11 +36,12 @@ function PartyBadge({ party }) {
   );
 }
 
-function Section({ title, children }) {
+function Section({ title, tag, children }) {
   return (
     <section className="border-t border-ops-border px-5 py-5">
-      <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-ops-muted">
+      <h3 className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-ops-muted">
         {title}
+        {tag && <SourceTag kind={tag} />}
       </h3>
       {children}
     </section>
@@ -272,7 +274,7 @@ export default function RaceDrawer({ stateCode, onClose }) {
             </div>
 
             {/* Betting Odds — current, two-sided; click a provider for its history */}
-            <Section title="Betting Odds — Win Probability">
+            <Section title="Betting Odds — Win Probability" tag="market">
               {oddsStatus === "loading" && (
                 <div className="flex gap-3">
                   <div className="h-28 flex-1 animate-pulse rounded-lg bg-ops-panel-2/60" />
@@ -303,8 +305,9 @@ export default function RaceDrawer({ stateCode, onClose }) {
                     {/* Expanded historical chart */}
                     {expandedSource && (
                       <div className="mt-3 rounded-lg border border-ops-border bg-ops-panel-2/40 p-3">
-                        <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ops-muted">
+                        <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-ops-muted">
                           {expandedLabel} · win probability over time
+                          <SourceTag kind="market" />
                         </div>
                         {historyStatus === "loading" && (
                           <div className="h-56 animate-pulse rounded bg-ops-panel-2/60" />
@@ -347,7 +350,7 @@ export default function RaceDrawer({ stateCode, onClose }) {
 
             {/* Polling Average — Senate only (no per-district House polls fetched) */}
             {!race.district && (
-            <Section title="Polling Average — D vs R">
+            <Section title="Polling Average — D vs R" tag="polls">
               {pollsStatus === "loading" && (
                 <div className="h-56 animate-pulse rounded bg-ops-panel-2/60" />
               )}

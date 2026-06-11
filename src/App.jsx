@@ -46,7 +46,7 @@ export default function App() {
       <MacroMetrics onReady={handleReady} />
 
       {/* Map centerpiece */}
-      <main className="min-h-[480px] rounded-2xl border border-ops-border bg-ops-panel/40 p-4 sm:p-5">
+      <main className="rounded-2xl border border-ops-border bg-ops-panel/40 p-4 sm:p-5">
         <USMap onSelectRace={setSelectedCode} />
       </main>
 

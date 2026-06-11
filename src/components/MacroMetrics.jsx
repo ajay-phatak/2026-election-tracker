@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { formatUpdated } from "../lib/format";
 import { fetchControl, fetchControlHistory, fetchPolls, sourceHasData } from "../lib/api";
 import OverlapBar, { overlapInfo } from "./OverlapBar";
+import SourceTag from "./SourceTag";
 import TrendChart from "./TrendChart";
 import VolumeStat from "./VolumeStat";
 
@@ -36,7 +37,7 @@ function CardShell({ title, badge, children, clickable, expanded, onClick }) {
         expanded ? "border-accent bg-ops-panel" : "border-ops-border bg-ops-panel/80"
       } ${clickable ? "cursor-pointer hover:border-accent/60 focus:outline-none focus-visible:border-accent" : ""}`}
     >
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-ops-muted">
           {title}
         </h3>
@@ -201,21 +202,24 @@ function PollCard({
               rightColor={rightColor}
             />
             <SplitBar leftPct={leftValue} rightPct={rightValue} leftColor={leftColor} rightColor={rightColor} />
+            {/* Same row position as the market cards' overlap/history line so
+                "View history" sits on one line across all four cards. */}
+            <div className="flex h-4 items-center justify-end">
+              {expandable && (
+                <span className="flex items-center gap-1 whitespace-nowrap text-[10px] font-semibold uppercase tracking-wide text-accent">
+                  <DownChevron flipped={expanded} />
+                  {expanded ? "Hide history" : "View history"}
+                </span>
+              )}
+            </div>
           </>
         ) : (
           <div className="flex flex-1 items-center text-xs text-ops-muted">No polling yet</div>
         ))}
 
       <div className="mt-auto flex items-center justify-between gap-2 pt-1">
-        {expandable ? (
-          <span className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent">
-            <DownChevron flipped={expanded} />
-            {expanded ? "Hide history" : "View history"}
-          </span>
-        ) : (
-          <span />
-        )}
-        <p className="text-[10px] uppercase tracking-wide text-ops-muted/70">
+        <SourceTag kind="polls" />
+        <p className="whitespace-nowrap text-[10px] uppercase tracking-wide text-ops-muted/70">
           Updated {formatUpdated(lastUpdated)}
         </p>
       </div>
@@ -304,17 +308,21 @@ function MarketControlCard({ title, status, data, isExpanded, onToggle, onSource
           </div>
         ))}
 
-      <div className="mt-auto flex items-center justify-between gap-2 pt-1">
-        {multi ? (
+      {/* Provider switcher — the one market-only control, on its own row so the
+          footer below stays identical across all four cards. */}
+      {status === "ok" && multi && (
+        <div className="flex">
           <SourceSwitcher
             source={current?.label}
             onPrev={() => changeSource(-1)}
             onNext={() => changeSource(1)}
           />
-        ) : (
-          <span />
-        )}
-        <p className="text-[10px] uppercase tracking-wide text-ops-muted/70">
+        </div>
+      )}
+
+      <div className="mt-auto flex items-center justify-between gap-2 pt-1">
+        <SourceTag kind="market" />
+        <p className="whitespace-nowrap text-[10px] uppercase tracking-wide text-ops-muted/70">
           Updated {formatUpdated(current?.lastUpdated)}
         </p>
       </div>
@@ -335,11 +343,12 @@ const APPROVAL_SERIES = [
 
 // Full-width history panel rendered below the card grid (so expanding doesn't
 // distort the 4-card row). Shared by the poll cards and the control cards.
-function HistoryPanel({ title, status, hasData, data, series, volume, volumeKey }) {
+function HistoryPanel({ title, tag, status, hasData, data, series, volume, volumeKey }) {
   return (
     <div className="rounded-xl border border-ops-border bg-ops-panel/60 p-4 sm:p-5">
-      <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ops-muted">
+      <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-ops-muted">
         {title}
+        {tag && <SourceTag kind={tag} />}
       </div>
       {status === "loading" && <div className="h-56 animate-pulse rounded bg-ops-panel-2/60" />}
       {status === "error" && (
@@ -410,6 +419,7 @@ export default function MacroMetrics({ onReady }) {
     const d = isGB ? gb : ap;
     panel = {
       title: `${isGB ? "Generic Ballot" : "Trump Approval"} · polling average over time`,
+      tag: "polls",
       status: "ok",
       hasData: (d?.trend?.length || 0) > 1,
       data: d?.trend,
@@ -420,6 +430,7 @@ export default function MacroMetrics({ onReady }) {
     const isKalshi = expanded.sourceId === "kalshi";
     panel = {
       title: `${expanded.chamber === "senate" ? "Senate" : "House"} Control · ${src?.label || ""} · win probability over time`,
+      tag: "market",
       status: controlHistoryStatus,
       hasData: Boolean(src?.hasData),
       data: src?.points,

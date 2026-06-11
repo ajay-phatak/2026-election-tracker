@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { WATCHED_RACES, RATINGS, HOUSE_OUTLOOK } from "../config/races.config";
 import { fetchHouseRaces, sourceHasData } from "../lib/api";
+import SourceTag from "./SourceTag";
+import Takeaway from "./Takeaway";
 
 const DEM = "#2563eb";
 const REP = "#dc2626";
@@ -57,12 +59,11 @@ function SeatsBar() {
         <div className="absolute top-[-2px] h-[calc(100%+4px)] w-px bg-ops-text/80" style={{ left: pct(majority) }} />
       </div>
 
-      <p className="mt-2 text-xs text-ops-muted">
-        Democrats need a net{" "}
-        <span className="font-semibold text-ops-text">+{needed} seats</span> to take the House
+      <Takeaway className="mt-2">
+        Democrats need a net <b>+{needed} seats</b> to take the House
         {current.ind ? ` · ${current.ind} independent` : ""}
-        {current.vacant ? ` · ${current.vacant} vacant` : ""}.
-      </p>
+        {current.vacant ? ` · ${current.vacant} vacant` : ""}
+      </Takeaway>
     </div>
   );
 }
@@ -70,7 +71,7 @@ function SeatsBar() {
 // ---- Rollup bars (path to 218) ------------------------------------------
 
 // Shared 435-seat rollup bar: 7 rating buckets + the 218 majority line.
-function Rollup({ caption, counts, footnote }) {
+function Rollup({ caption, tag, counts, footnote }) {
   const { total, majority } = HOUSE_OUTLOOK;
   const order = Object.keys(RATINGS); // safeD ... safeR
   const demBase = counts.safeD + counts.likelyD + counts.leanD;
@@ -80,8 +81,16 @@ function Rollup({ caption, counts, footnote }) {
 
   return (
     <div>
-      <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ops-muted">
-        {caption}
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-ops-muted">
+          <span className="truncate">{caption}</span>
+          {tag && <SourceTag kind={tag} />}
+        </div>
+        <div className="whitespace-nowrap text-[11px] font-semibold tabular" title="Seats rated lean or better">
+          <span style={{ color: DEM }}>{demBase} D</span>
+          <span className="font-normal text-ops-muted"> · </span>
+          <span style={{ color: REP }}>{repBase} R</span>
+        </div>
       </div>
       <div className="relative flex h-3 w-full overflow-hidden rounded-full bg-ops-border">
         {order.map((key) => (
@@ -93,12 +102,9 @@ function Rollup({ caption, counts, footnote }) {
         ))}
         <div className="absolute top-[-2px] h-[calc(100%+4px)] w-px bg-ops-text/80" style={{ left: `${(majority / total) * 100}%` }} />
       </div>
-      <p className="mt-2 text-xs text-ops-muted">
-        Safe/likely/lean: <span className="font-semibold" style={{ color: DEM }}>{demBase} D</span>{" "}
-        · <span className="font-semibold" style={{ color: REP }}>{repBase} R</span>. To reach 218,
-        Democrats need <span className="font-semibold text-ops-text">{demNeed}</span> of{" "}
-        {counts.tossup} toss-ups (Republicans {repNeed}).
-      </p>
+      <Takeaway className="mt-2">
+        Dems need <b>{demNeed} of {counts.tossup}</b> toss-ups · GOP needs <b>{repNeed}</b>
+      </Takeaway>
       {footnote && (
         <p className="mt-1 text-[10px] uppercase tracking-wide text-ops-muted/60">{footnote}</p>
       )}
@@ -107,7 +113,7 @@ function Rollup({ caption, counts, footnote }) {
 }
 
 function RatingsRollup() {
-  return <Rollup caption="All 435 seats by rating" counts={HOUSE_OUTLOOK.ratings} />;
+  return <Rollup caption="All 435 seats by rating" tag="rating" counts={HOUSE_OUTLOOK.ratings} />;
 }
 
 // Bucket a district's market favorite into a rating-equivalent by the raw D−R
@@ -143,8 +149,9 @@ function MarketRollup({ odds }) {
   if (!odds) {
     return (
       <div>
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ops-muted">
-          All 435 seats by market consensus
+        <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-ops-muted">
+          All 435 by market consensus
+          <SourceTag kind="market" />
         </div>
         <div className="h-3 w-full animate-pulse rounded-full bg-ops-border" />
         <div className="mt-2 h-12 animate-pulse rounded bg-ops-panel-2/60" />
@@ -154,7 +161,8 @@ function MarketRollup({ odds }) {
 
   return (
     <Rollup
-      caption="All 435 seats by market consensus"
+      caption="All 435 by market consensus"
+      tag="market"
       counts={counts}
       footnote="Watchlist seats bucketed by market spread (±15/35/55) · rest keep rating"
     />
@@ -177,12 +185,14 @@ function Watchlist({ odds, onSelectRace }) {
     return [...withLead].sort(cmp);
   }, [districts, odds, sort]);
 
-  // Plain render helper (not a component) — sortable column header.
+  // Plain render helper (not a component) — sortable column header. `label`
+  // can be text or a SourceTag chip.
   const sortHeader = (id, label, className = "") => (
-    <th className={`pb-2 font-semibold ${className}`}>
+    <th className={`py-2 font-semibold ${className}`}>
       <button
         type="button"
         onClick={() => setSort(id)}
+        title={`Sort by ${id}`}
         className={`uppercase tracking-wide transition-colors hover:text-ops-text ${
           sort === id ? "text-ops-text" : "text-ops-muted"
         }`}
@@ -203,11 +213,12 @@ function Watchlist({ odds, onSelectRace }) {
       <div className="overflow-x-auto">
         <table className="w-full text-left text-sm [&_td]:pr-4 [&_th]:pr-4">
           <thead>
-            <tr className="border-b border-ops-border text-[10px]">
-              {sortHeader("district", "District")}
-              <th className="pb-2 font-semibold text-[10px] uppercase tracking-wide text-ops-muted">Incumbent</th>
-              {sortHeader("rating", "Rating")}
-              {sortHeader("market", "Market", "text-right")}
+            {/* Banded row + heavier rule so the chip labels still read as column headers */}
+            <tr className="border-b-2 border-ops-border bg-ops-panel-2/50 text-[10px]">
+              {sortHeader("district", "District", "pl-2")}
+              <th className="py-2 font-semibold text-[10px] uppercase tracking-wide text-ops-muted">Incumbent</th>
+              {sortHeader("rating", <SourceTag kind="rating" />)}
+              {sortHeader("market", <SourceTag kind="market" />, "text-right")}
             </tr>
           </thead>
           <tbody>
@@ -217,7 +228,7 @@ function Watchlist({ odds, onSelectRace }) {
                 onClick={() => onSelectRace(d.code)}
                 className="cursor-pointer border-b border-ops-border/50 transition-colors hover:bg-ops-panel-2/60"
               >
-                <td className="py-2 font-semibold text-ops-text">{d.district}</td>
+                <td className="py-2 pl-2 font-semibold text-ops-text">{d.district}</td>
                 <td className="py-2 text-ops-muted">
                   {d.incumbent}{" "}
                   <span
