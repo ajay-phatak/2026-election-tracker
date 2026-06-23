@@ -25,8 +25,41 @@ const PM_BASE = "https://gamma-api.polymarket.com";
 // Polymarket 403s requests without a UA header.
 const UA = "2026-election-tracker/1.0 (dashboard)";
 
+// Edge-cache successful upstream GETs (Cloudflare Workers `caches`; a plain
+// fetch in Node / local dev). Only 2xx responses are stored, so a rate-limit
+// 429 never poisons a key — failures simply fall through and are retried on the
+// next call. This lets the same market data be reused across the race / history
+// / control endpoints and the client's prefetch burst instead of re-hitting
+// (and tripping the rate limits of) Kalshi and Polymarket.
+const EDGE_TTL = 180;
+async function edgeFetch(url, init) {
+  const cache = typeof caches !== "undefined" ? caches.default : null;
+  if (!cache) return fetch(url, init);
+  const key = new Request(url);
+  try {
+    const hit = await cache.match(key);
+    if (hit) return hit;
+  } catch {
+    // ignore cache read errors and fetch normally
+  }
+  const res = await fetch(url, init);
+  if (res.ok) {
+    try {
+      const headers = new Headers(res.headers);
+      headers.set("Cache-Control", `s-maxage=${EDGE_TTL}`);
+      await cache.put(
+        key,
+        new Response(res.clone().body, { status: res.status, statusText: res.statusText, headers })
+      );
+    } catch {
+      // caching is best-effort — never let a cache write fail the request
+    }
+  }
+  return res;
+}
+
 async function getJson(url) {
-  const r = await fetch(url, { headers: { "User-Agent": UA, Accept: "application/json" } });
+  const r = await edgeFetch(url, { headers: { "User-Agent": UA, Accept: "application/json" } });
   if (!r.ok) throw new Error(`${url} -> ${r.status}`);
   return r.json();
 }
@@ -104,7 +137,7 @@ let kalshiChain = Promise.resolve();
 function kalshiFetch(url) {
   const exec = async () => {
     for (let attempt = 0; attempt < 5; attempt++) {
-      const r = await fetch(url, { headers: { "User-Agent": UA, Accept: "application/json" } });
+      const r = await edgeFetch(url, { headers: { "User-Agent": UA, Accept: "application/json" } });
       if (r.status === 429) {
         await sleep(250 * (attempt + 1));
         continue;
@@ -125,7 +158,9 @@ function kalshiFetch(url) {
 // Daily candles for one Kalshi market -> [{ t, p (0-100), vol }]. Empty on failure.
 async function kalshiCandles(series, ticker, { days = 730 } = {}) {
   if (!series || !ticker) return [];
-  const end = Math.floor(Date.now() / 1000);
+  // Snap end_ts to the edge-cache window so the candle URL is stable within it
+  // (a per-second timestamp would make every request a fresh cache key/miss).
+  const end = Math.floor(Date.now() / 1000 / EDGE_TTL) * EDGE_TTL;
   const start = end - days * 86400;
   try {
     const d = await kalshiFetch(

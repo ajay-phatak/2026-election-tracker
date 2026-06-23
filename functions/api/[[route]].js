@@ -28,32 +28,20 @@ function json(data, { status = 200, cache } = {}) {
 const missingState = () => json({ error: "missing ?state=" }, { status: 400 });
 const unknownState = (state) => json({ error: `unknown state ${state}` }, { status: 404 });
 
-// Cache successful responses at Cloudflare's edge, honoring each route's
-// Cache-Control TTL. This caches the *whole* endpoint result (computed once per
-// TTL per colo) rather than the individual upstream subrequests, so the volume
-// of calls to rate-limited hosts (Kalshi, VoteHub) drops without any single
-// failed subrequest poisoning a cache key. Only 2xx is stored; errors aren't.
-export async function onRequestGet(context) {
-  const { request } = context;
-  const cache = typeof caches !== "undefined" ? caches.default : null;
-
-  if (cache) {
-    const hit = await cache.match(request);
-    if (hit) return hit;
-  }
-
-  const response = await routeRequest(context);
-
-  if (cache && response.ok) {
-    context.waitUntil(cache.put(request, response.clone()));
-  }
-  return response;
-}
-
-async function routeRequest({ request, env }) {
+// No response-level caching here: caching the whole endpoint result locks in
+// any partial (a compute that hit a Kalshi 429 on some tickers would cache the
+// half-null result for the TTL). Caching is done at the upstream-subrequest
+// level instead (success-only) in _providers.js, so partials self-heal.
+export async function onRequestGet({ request, env }) {
   const url = new URL(request.url);
   const route = url.pathname.replace(/^\/api\//, "").replace(/\/+$/, "");
   const state = String(url.searchParams.get("state") || "").toUpperCase();
+
+  // TEMP diagnostic: /api/race-news?state=GA&debug=1 reports whether the key
+  // reaches the Function and what GNews returns, without leaking the key value.
+  if (route === "race-news" && url.searchParams.get("debug") === "1") {
+    return newsDebug(state, env.NEWS_API_KEY);
+  }
 
   try {
     switch (route) {
@@ -110,4 +98,27 @@ async function routeRequest({ request, env }) {
   } catch (e) {
     return json({ error: String(e?.message || e) }, { status: 500 });
   }
+}
+
+// TEMP: diagnostic for the GNews integration. Reports key presence/length (not
+// the value) and a live GNews probe so we can tell "no key on this env" apart
+// from "GNews returned nothing". Remove once news is confirmed working.
+async function newsDebug(state, key) {
+  const out = { hasKey: Boolean(key), keyLen: (key || "").length, state };
+  if (key && state) {
+    try {
+      const u =
+        `https://gnews.io/api/v4/search?q=${encodeURIComponent(state + " Senate")}` +
+        `&lang=en&country=us&max=3&apikey=${key}`;
+      const r = await fetch(u);
+      const d = await r.json().catch(() => ({}));
+      out.gnewsStatus = r.status;
+      out.totalArticles = d.totalArticles;
+      out.returned = (d.articles || []).length;
+      out.info = d.information || d.errors || null;
+    } catch (e) {
+      out.error = String(e?.message || e);
+    }
+  }
+  return json(out);
 }
