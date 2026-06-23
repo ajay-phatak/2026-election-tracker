@@ -43,19 +43,22 @@ async function edgeFetch(url, init) {
     // ignore cache read errors and fetch normally
   }
   const res = await fetch(url, init);
-  if (res.ok) {
-    try {
-      const headers = new Headers(res.headers);
-      headers.set("Cache-Control", `s-maxage=${EDGE_TTL}`);
-      await cache.put(
-        key,
-        new Response(res.clone().body, { status: res.status, statusText: res.statusText, headers })
-      );
-    } catch {
-      // caching is best-effort — never let a cache write fail the request
-    }
+  if (!res.ok) return res; // don't cache 429s/errors — let the caller retry
+  // Buffer the body once, then build identical clean responses for the cache and
+  // the caller. Streaming a clone straight into cache.put silently failed for the
+  // large candle payloads, leaving history uncached; a buffered body + minimal
+  // headers caches reliably.
+  const body = await res.arrayBuffer();
+  const headers = {
+    "content-type": res.headers.get("content-type") || "application/json",
+    "Cache-Control": `s-maxage=${EDGE_TTL}`,
+  };
+  try {
+    await cache.put(key, new Response(body, { status: 200, headers }));
+  } catch {
+    // caching is best-effort — never let a cache write fail the request
   }
-  return res;
+  return new Response(body, { status: 200, headers });
 }
 
 async function getJson(url) {
