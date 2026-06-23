@@ -28,7 +28,7 @@ function json(data, { status = 200, cache } = {}) {
 const missingState = () => json({ error: "missing ?state=" }, { status: 400 });
 const unknownState = (state) => json({ error: `unknown state ${state}` }, { status: 404 });
 
-export async function onRequestGet({ request }) {
+export async function onRequestGet({ request, env }) {
   const url = new URL(request.url);
   const route = url.pathname.replace(/^\/api\//, "").replace(/\/+$/, "");
   const state = String(url.searchParams.get("state") || "").toUpperCase();
@@ -76,7 +76,7 @@ export async function onRequestGet({ request }) {
 
       case "race-news": {
         if (!state) return missingState();
-        const data = await getRaceNews(state);
+        const data = await getRaceNews(state, env.NEWS_API_KEY);
         return data
           ? json(data, { cache: "s-maxage=1800, stale-while-revalidate=3600" })
           : unknownState(state);

@@ -1,72 +1,18 @@
-// Recent-news proxy via Google News RSS — free, no API key. Framework-agnostic
-// (plain async + global fetch) so it runs both as a Vercel function and under the
-// Vite dev middleware. Fetched server-side because the browser can't (CORS) and
-// because the response is RSS XML we parse here.
+// Recent-news proxy via the GNews API (https://gnews.io). Replaces the old Google
+// News RSS source, which Google blocks from datacenter/Cloudflare egress IPs.
+// Framework-agnostic (plain async + global fetch) so it runs both as a Cloudflare
+// Pages Function and under the Vite dev middleware.
+//
+// The API key is passed in by the caller (env.NEWS_API_KEY on Workers,
+// process.env.NEWS_API_KEY in local dev). With no key we degrade gracefully to an
+// empty article list rather than erroring — the UI already handles empty news.
 //
 // Result shape: { stateCode, articles: [{ title, link, source, publishedAt }], lastUpdated }
 
 import { WATCHED_RACES } from "../src/config/races.config.js";
 
-const GNEWS = "https://news.google.com/rss/search";
-// Google 403s/empties some UA-less requests; match the convention used elsewhere.
-const UA = "2026-election-tracker/1.0 (dashboard)";
-
+const GNEWS = "https://gnews.io/api/v4/search";
 const MAX_ARTICLES = 6;
-
-// Decode the handful of XML/HTML entities Google News emits, and strip CDATA.
-function decode(s) {
-  if (!s) return "";
-  return s
-    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#0?39;/g, "'")
-    .replace(/&apos;/g, "'")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
-    .trim();
-}
-
-function tag(block, name) {
-  const m = block.match(new RegExp(`<${name}[^>]*>([\\s\\S]*?)<\\/${name}>`, "i"));
-  return m ? decode(m[1]) : "";
-}
-
-// Google appends " - <Source>" to item titles; drop it when it matches the source.
-function stripSourceSuffix(title, source) {
-  if (source && title.endsWith(` - ${source}`)) {
-    return title.slice(0, -(source.length + 3)).trim();
-  }
-  return title;
-}
-
-function parseRss(xml, stateName) {
-  const state = (stateName || "").toLowerCase();
-  const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)];
-  return items
-    .map(([, block]) => {
-      const source = tag(block, "source");
-      const title = stripSourceSuffix(tag(block, "title"), source);
-      const link = tag(block, "link");
-      const pub = tag(block, "pubDate");
-      const ts = pub ? new Date(pub).getTime() : NaN;
-      return {
-        title,
-        link,
-        source,
-        publishedAt: Number.isNaN(ts) ? null : new Date(ts).toISOString(),
-        // Google occasionally relaxes the quoted phrase and leaks generic
-        // cross-state "Latest Polls" pages; prioritize headlines naming the state.
-        rel: state && title.toLowerCase().includes(state) ? 1 : 0,
-      };
-    })
-    .filter((a) => a.title && a.link)
-    .sort((a, b) => b.rel - a.rel || (b.publishedAt || "").localeCompare(a.publishedAt || ""))
-    .slice(0, MAX_ARTICLES)
-    .map((a) => ({ title: a.title, link: a.link, source: a.source, publishedAt: a.publishedAt }));
-}
 
 function ordinal(n) {
   const s = ["th", "st", "nd", "rd"];
@@ -74,9 +20,9 @@ function ordinal(n) {
   return `${n}${s[(v - 20) % 10] || s[v] || s[0]}`;
 }
 
-// Build the Google News query + the relevance term (titles containing it rank first).
+// Build the GNews query + the relevance term (titles containing it rank first).
 // Senate quotes "<State> Senate race"; House quotes the incumbent (or, for open
-// seats, the "<State> <Nth> district" phrase) — verified to return district-specific news.
+// seats, the "<State> <Nth> district" phrase).
 function newsConfig(race) {
   if (!race.district) {
     return { query: `"${race.state} Senate race" 2026`, rel: race.state };
@@ -90,19 +36,43 @@ function newsConfig(race) {
   return { query: `"${race.state} ${ordinal(num)} district" House 2026`, rel: race.state };
 }
 
-export async function getRaceNews(code) {
+// Map GNews's article shape to ours, ranking titles that name the relevance term
+// first (GNews occasionally returns loosely-related results), then newest-first.
+function normalize(articles, rel) {
+  const term = (rel || "").toLowerCase();
+  return (articles || [])
+    .map((a) => ({
+      title: a.title || "",
+      link: a.url || "",
+      source: a.source?.name || "",
+      publishedAt: a.publishedAt || null,
+      relScore: term && (a.title || "").toLowerCase().includes(term) ? 1 : 0,
+    }))
+    .filter((a) => a.title && a.link)
+    .sort((a, b) => b.relScore - a.relScore || (b.publishedAt || "").localeCompare(a.publishedAt || ""))
+    .slice(0, MAX_ARTICLES)
+    .map(({ title, link, source, publishedAt }) => ({ title, link, source, publishedAt }));
+}
+
+export async function getRaceNews(code, apiKey) {
   const race = [...WATCHED_RACES.senate, ...(WATCHED_RACES.house || [])].find(
     (r) => (r.code ?? r.stateCode) === code
   );
   if (!race) return null;
 
   const empty = { stateCode: code, articles: [], lastUpdated: null };
+  // No key configured -> degrade gracefully (local dev, or before the Pages env var is set).
+  if (!apiKey) return empty;
+
   try {
     const { query, rel } = newsConfig(race);
-    const url = `${GNEWS}?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`;
-    const r = await fetch(url, { headers: { "User-Agent": UA } });
+    const url =
+      `${GNEWS}?q=${encodeURIComponent(query)}` +
+      `&lang=en&country=us&max=${MAX_ARTICLES}&sortby=relevance&apikey=${apiKey}`;
+    const r = await fetch(url, { headers: { Accept: "application/json" } });
     if (!r.ok) return empty;
-    const articles = parseRss(await r.text(), rel);
+    const data = await r.json();
+    const articles = normalize(data.articles, rel);
     return {
       stateCode: code,
       articles,

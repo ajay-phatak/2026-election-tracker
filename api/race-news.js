@@ -8,7 +8,7 @@ export default async function handler(req, res) {
     return;
   }
   try {
-    const data = await getRaceNews(state);
+    const data = await getRaceNews(state, process.env.NEWS_API_KEY);
     if (!data) {
       res.status(404).json({ error: `unknown state ${state}` });
       return;
