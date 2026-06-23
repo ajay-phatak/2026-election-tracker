@@ -37,12 +37,6 @@ export async function onRequestGet({ request, env }) {
   const route = url.pathname.replace(/^\/api\//, "").replace(/\/+$/, "");
   const state = String(url.searchParams.get("state") || "").toUpperCase();
 
-  // TEMP diagnostic: /api/race-news?state=GA&debug=1 reports whether the key
-  // reaches the Function and what GNews returns, without leaking the key value.
-  if (route === "race-news" && url.searchParams.get("debug") === "1") {
-    return newsDebug(state, env.NEWS_API_KEY);
-  }
-
   try {
     switch (route) {
       case "control":
@@ -98,27 +92,4 @@ export async function onRequestGet({ request, env }) {
   } catch (e) {
     return json({ error: String(e?.message || e) }, { status: 500 });
   }
-}
-
-// TEMP: diagnostic for the GNews integration. Reports key presence/length (not
-// the value) and a live GNews probe so we can tell "no key on this env" apart
-// from "GNews returned nothing". Remove once news is confirmed working.
-async function newsDebug(state, key) {
-  const out = { hasKey: Boolean(key), keyLen: (key || "").length, state };
-  if (key && state) {
-    try {
-      const u =
-        `https://gnews.io/api/v4/search?q=${encodeURIComponent(state + " Senate")}` +
-        `&lang=en&country=us&max=3&apikey=${key}`;
-      const r = await fetch(u);
-      const d = await r.json().catch(() => ({}));
-      out.gnewsStatus = r.status;
-      out.totalArticles = d.totalArticles;
-      out.returned = (d.articles || []).length;
-      out.info = d.information || d.errors || null;
-    } catch (e) {
-      out.error = String(e?.message || e);
-    }
-  }
-  return json(out);
 }
