@@ -66,9 +66,10 @@ export async function getRaceNews(code, apiKey) {
 
   try {
     const { query, rel } = newsConfig(race);
+    // Keep to params supported on the GNews free tier (q, lang, country, max).
     const url =
       `${GNEWS}?q=${encodeURIComponent(query)}` +
-      `&lang=en&country=us&max=${MAX_ARTICLES}&sortby=relevance&apikey=${apiKey}`;
+      `&lang=en&country=us&max=${MAX_ARTICLES}&apikey=${apiKey}`;
     const r = await fetch(url, { headers: { Accept: "application/json" } });
     if (!r.ok) return empty;
     const data = await r.json();
