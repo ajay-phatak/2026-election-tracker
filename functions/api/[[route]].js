@@ -28,7 +28,29 @@ function json(data, { status = 200, cache } = {}) {
 const missingState = () => json({ error: "missing ?state=" }, { status: 400 });
 const unknownState = (state) => json({ error: `unknown state ${state}` }, { status: 404 });
 
-export async function onRequestGet({ request, env }) {
+// Cache successful responses at Cloudflare's edge, honoring each route's
+// Cache-Control TTL. This caches the *whole* endpoint result (computed once per
+// TTL per colo) rather than the individual upstream subrequests, so the volume
+// of calls to rate-limited hosts (Kalshi, VoteHub) drops without any single
+// failed subrequest poisoning a cache key. Only 2xx is stored; errors aren't.
+export async function onRequestGet(context) {
+  const { request } = context;
+  const cache = typeof caches !== "undefined" ? caches.default : null;
+
+  if (cache) {
+    const hit = await cache.match(request);
+    if (hit) return hit;
+  }
+
+  const response = await routeRequest(context);
+
+  if (cache && response.ok) {
+    context.waitUntil(cache.put(request, response.clone()));
+  }
+  return response;
+}
+
+async function routeRequest({ request, env }) {
   const url = new URL(request.url);
   const route = url.pathname.replace(/^\/api\//, "").replace(/\/+$/, "");
   const state = String(url.searchParams.get("state") || "").toUpperCase();
