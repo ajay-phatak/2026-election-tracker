@@ -137,13 +137,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // can't coordinate the cross-request burst the client fan-out creates. So we also
 // fail fast (few, short retries): a 429'd ticker returns null quickly rather than
 // blocking the response for seconds, and the edge cache fills it on a later call.
+// `retries`/`base` let callers tune the 429 policy: current-odds calls fire in the
+// on-load burst, so they fail fast (default); the heavy history pull is a single,
+// user-initiated (lazy) request with no burst, so it retries patiently to actually
+// land the candles rather than giving up and rendering an empty line.
 let kalshiChain = Promise.resolve();
-function kalshiFetch(url) {
+function kalshiFetch(url, { retries = 3, base = 150 } = {}) {
   const exec = async () => {
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < retries; attempt++) {
       const r = await edgeFetch(url, { headers: { "User-Agent": UA, Accept: "application/json" } });
       if (r.status === 429) {
-        await sleep(150 * (attempt + 1));
+        await sleep(base * (attempt + 1));
         continue;
       }
       if (!r.ok) throw new Error(`${url} -> ${r.status}`);
@@ -160,7 +164,7 @@ function kalshiFetch(url) {
 }
 
 // Daily candles for one Kalshi market -> [{ t, p (0-100), vol }]. Empty on failure.
-async function kalshiCandles(series, ticker, { days = 730 } = {}) {
+async function kalshiCandles(series, ticker, { days = 730, retries, base } = {}) {
   if (!series || !ticker) return [];
   // Snap end_ts to the edge-cache window so the candle URL is stable within it
   // (a per-second timestamp would make every request a fresh cache key/miss).
@@ -168,7 +172,8 @@ async function kalshiCandles(series, ticker, { days = 730 } = {}) {
   const start = end - days * 86400;
   try {
     const d = await kalshiFetch(
-      `${KALSHI_ELECTIONS}/series/${series}/markets/${ticker}/candlesticks?period_interval=1440&start_ts=${start}&end_ts=${end}`
+      `${KALSHI_ELECTIONS}/series/${series}/markets/${ticker}/candlesticks?period_interval=1440&start_ts=${start}&end_ts=${end}`,
+      { retries, base }
     );
     return (d.candlesticks || [])
       .map((c) => ({
@@ -204,9 +209,12 @@ async function kalshiCandleOdds(cfg) {
 // Full Kalshi candle history -> { points:[{t,dem,rep,volume}], hasData }.
 async function kalshiCandleHistory(cfg) {
   if (!cfg) return { points: [], hasData: false };
+  // Lazy, user-initiated request (no burst) -> retry patiently so the candle
+  // history actually lands instead of failing fast to an empty line.
+  const patient = { retries: 6, base: 300 };
   const [dem, rep] = await Promise.all([
-    kalshiCandles(cfg.series, cfg.demTicker),
-    kalshiCandles(cfg.series, cfg.repTicker),
+    kalshiCandles(cfg.series, cfg.demTicker, patient),
+    kalshiCandles(cfg.series, cfg.repTicker, patient),
   ]);
   const day = (t) => Math.floor(t / 86400) * 86400;
   const demByT = new Map(dem.map((x) => [day(x.t), x]));
