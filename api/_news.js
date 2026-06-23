@@ -23,21 +23,22 @@ function ordinal(n) {
 // Build the GNews query + the relevance term (titles containing it rank first).
 // Senate quotes "<State> Senate race"; House quotes the incumbent (or, for open
 // seats, the "<State> <Nth> district" phrase).
-// Queries are unquoted: GNews's free plan only returns articles from the last 30
-// days, and an exact-phrase match (e.g. "Georgia Senate race") often has nothing
-// that recent, yielding an empty list. Looser term matching keeps results inside
-// the window; normalize() re-ranks state/name matches to the top.
+// Keep queries to as few terms as possible. GNews ANDs space-separated terms and
+// the free plan only returns the last 30 days, so each extra word shrinks the set
+// toward empty (e.g. "Georgia Senate race 2026" -> ~0, while "Georgia Senate"
+// returns hundreds). normalize() re-ranks state/name matches to the top, so the
+// looser query stays relevant.
 function newsConfig(race) {
   if (!race.district) {
-    return { query: `${race.state} Senate race 2026`, rel: race.state };
+    return { query: `${race.state} Senate`, rel: race.state };
   }
   const hasName = race.incumbent && !/open/i.test(race.incumbent);
   if (hasName) {
     const surname = race.incumbent.split(" ").pop();
-    return { query: `${race.incumbent} ${race.state} House 2026`, rel: surname };
+    return { query: race.incumbent, rel: surname };
   }
   const num = Number(race.district.split("-")[1]);
-  return { query: `${race.state} ${ordinal(num)} district House 2026`, rel: race.state };
+  return { query: `${race.state} ${ordinal(num)} district`, rel: race.state };
 }
 
 // Map GNews's article shape to ours, ranking titles that name the relevance term
