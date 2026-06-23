@@ -95,14 +95,17 @@ export async function fetchRacePolls(stateCode) {
   );
 }
 
-// Warm the caches in the background on app load so drawers open instantly.
+// Warm the caches in the background on app load so drawers open quickly. Only the
+// light current-odds call is prefetched per state; history and news are loaded
+// lazily when a drawer opens (RaceDrawer fetches them on open). Prefetching them
+// for all 9 states at once bursts the upstreams — Kalshi rate-limits the candle
+// history and GNews throttles the news, leaving both empty on Cloudflare's shared
+// egress. Fetching on demand keeps each to a single request.
 export function prefetchRaces(stateCodes) {
   fetchAllRacePolls().catch(() => {});
   fetchHouseRaces().catch(() => {});
   for (const sc of stateCodes) {
     fetchRaceOdds(sc).catch(() => {});
-    fetchRaceHistory(sc).catch(() => {});
-    fetchRaceNews(sc).catch(() => {});
   }
 }
 

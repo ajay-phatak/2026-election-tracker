@@ -383,19 +383,30 @@ export default function MacroMetrics({ onReady }) {
     const ctl = fetchControl()
       .then((d) => alive && (setControl(d), setStatus("ok")))
       .catch(() => alive && setStatus("error"));
-    fetchControlHistory()
-      .then((d) => alive && (setControlHistory(d), setControlHistoryStatus("ok")))
-      .catch(() => alive && setControlHistoryStatus("error"));
     const polls = fetchPolls()
       .then((d) => alive && (setPollData(d), setPollStatus("ok")))
       .catch(() => alive && setPollStatus("error"));
-    // Reveal the dashboard once the above-the-fold market + poll data settles
-    // (history streams in behind the scenes).
+    // Reveal the dashboard once the above-the-fold market + poll data settles.
     Promise.allSettled([ctl, polls]).then(() => alive && onReady?.());
     return () => {
       alive = false;
     };
   }, [onReady]);
+
+  // Control history (heavy Kalshi candle pull) is only shown when a control card
+  // is expanded, so fetch it lazily on first expand rather than eagerly on load —
+  // eager fetching added to the Kalshi rate-limit burst on Cloudflare.
+  useEffect(() => {
+    if (expanded?.type !== "control" || controlHistory) return;
+    let alive = true;
+    setControlHistoryStatus("loading");
+    fetchControlHistory()
+      .then((d) => alive && (setControlHistory(d), setControlHistoryStatus("ok")))
+      .catch(() => alive && setControlHistoryStatus("error"));
+    return () => {
+      alive = false;
+    };
+  }, [expanded, controlHistory]);
 
   const gb = pollData?.genericBallot;
   const ap = pollData?.approval;
