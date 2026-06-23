@@ -25,8 +25,17 @@ const PM_BASE = "https://gamma-api.polymarket.com";
 // Polymarket 403s requests without a UA header.
 const UA = "2026-election-tracker/1.0 (dashboard)";
 
+// Cache subrequests at Cloudflare's edge so repeated/serialized fetches don't
+// re-hit the upstream (and trip its rate limits). `cf` is a Workers-only fetch
+// option; it's ignored by Node's fetch, so local dev / the Vite middleware are
+// unaffected.
+const EDGE_CACHE = { cacheTtl: 300, cacheEverything: true };
+
 async function getJson(url) {
-  const r = await fetch(url, { headers: { "User-Agent": UA, Accept: "application/json" } });
+  const r = await fetch(url, {
+    headers: { "User-Agent": UA, Accept: "application/json" },
+    cf: EDGE_CACHE,
+  });
   if (!r.ok) throw new Error(`${url} -> ${r.status}`);
   return r.json();
 }
@@ -104,7 +113,10 @@ let kalshiChain = Promise.resolve();
 function kalshiFetch(url) {
   const exec = async () => {
     for (let attempt = 0; attempt < 5; attempt++) {
-      const r = await fetch(url, { headers: { "User-Agent": UA, Accept: "application/json" } });
+      const r = await fetch(url, {
+        headers: { "User-Agent": UA, Accept: "application/json" },
+        cf: EDGE_CACHE,
+      });
       if (r.status === 429) {
         await sleep(250 * (attempt + 1));
         continue;
@@ -125,7 +137,9 @@ function kalshiFetch(url) {
 // Daily candles for one Kalshi market -> [{ t, p (0-100), vol }]. Empty on failure.
 async function kalshiCandles(series, ticker, { days = 730 } = {}) {
   if (!series || !ticker) return [];
-  const end = Math.floor(Date.now() / 1000);
+  // Snap end_ts to the 300s edge-cache window so the candle URL is stable within
+  // it — otherwise a per-second timestamp would bust the cache on every request.
+  const end = Math.floor(Date.now() / 1000 / 300) * 300;
   const start = end - days * 86400;
   try {
     const d = await kalshiFetch(
