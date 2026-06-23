@@ -31,7 +31,7 @@ const UA = "2026-election-tracker/1.0 (dashboard)";
 // next call. This lets the same market data be reused across the race / history
 // / control endpoints and the client's prefetch burst instead of re-hitting
 // (and tripping the rate limits of) Kalshi and Polymarket.
-const EDGE_TTL = 180;
+const EDGE_TTL = 300;
 async function edgeFetch(url, init) {
   const cache = typeof caches !== "undefined" ? caches.default : null;
   if (!cache) return fetch(url, init);
@@ -132,14 +132,18 @@ const KALSHI_ELECTIONS = "https://api.elections.kalshi.com/trade-api/v2";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // The elections host rate-limits bursts (HTTP 429 after ~5 rapid requests). Serialize
-// all requests to it through one chain and retry 429s with backoff.
+// requests through one chain and retry 429s with backoff. NOTE: the chain is a
+// module global, so on Cloudflare it only serializes within a single isolate — it
+// can't coordinate the cross-request burst the client fan-out creates. So we also
+// fail fast (few, short retries): a 429'd ticker returns null quickly rather than
+// blocking the response for seconds, and the edge cache fills it on a later call.
 let kalshiChain = Promise.resolve();
 function kalshiFetch(url) {
   const exec = async () => {
-    for (let attempt = 0; attempt < 5; attempt++) {
+    for (let attempt = 0; attempt < 3; attempt++) {
       const r = await edgeFetch(url, { headers: { "User-Agent": UA, Accept: "application/json" } });
       if (r.status === 429) {
-        await sleep(250 * (attempt + 1));
+        await sleep(150 * (attempt + 1));
         continue;
       }
       if (!r.ok) throw new Error(`${url} -> ${r.status}`);
