@@ -1,33 +1,35 @@
-// Scheduled warmer for the Workers KV data layer. A token-gated cron endpoint
-// (driven by a GitHub Actions schedule) that fetches every upstream at a paced,
-// controlled rate and writes the aggregate KV keys the read path in
-// functions/api/[[route]].js serves from. Decoupling the warmer from user
-// traffic is the whole point: user reads hit KV and scale independently of the
-// rate-limited free upstreams (Kalshi/Polymarket/VoteHub/GNews).
+// Scheduled warmer for the Workers KV data layer (see docs/kv-warmer-plan.md).
+// A token-gated cron endpoint (driven by a GitHub Actions schedule) that fills the
+// aggregate KV keys the read path in functions/api/[[route]].js serves from, so
+// user reads hit KV and scale independently of the rate-limited free upstreams.
+//
+// ORIGIN-MIRROR DESIGN: rather than fetch the upstreams (Kalshi/Polymarket/GNews)
+// directly — which from Cloudflare's shared, rate-limited egress IP fans each
+// logical fetch into many retried subrequests and blows the free Workers
+// 50-subrequest cap — we pull the already-assembled JSON from a clean-IP origin
+// that has done that work: the app's own Vercel deployment (whose egress isn't
+// rate-limited). Each KV key is then ONE reliable subrequest, so a full warm is
+// ~32 fetches (well under 50) with complete data. Vercel thus acts as the data
+// origin and Cloudflare as a cached global serving layer. WARM_ORIGIN overrides
+// the default origin (a Pages env var); no providers/keys are needed here — the
+// origin owns the upstream fetching and the NEWS_API_KEY.
 //
 // Pages routes this static file ahead of the [[route]] catch-all, so /api/refresh
-// lands here. It reuses the same framework-agnostic providers, unchanged.
-//
-// CHUNKING: Cloudflare's free Workers plan caps a single invocation at 50
-// subrequests. A full warm of all 8 keys is ~100+ upstream fetches, so we split
-// into groups (?only=core|house|races|histories) that each stay under the ceiling;
-// the cron calls each group as its own invocation. No ?only= (or ?only=all) warms
-// everything in one shot — fine on the paid plan or locally, over the cap on free.
+// lands here.
 
-import {
-  getControl,
-  getControlHistory,
-  getAllHouseRaces,
-  getRace,
-  getRaceHistory,
-} from "../../api/_providers.js";
-import { getAllRacePolls, getMacroPolls } from "../../api/_polls.js";
-import { getRaceNews } from "../../api/_news.js";
 import { WATCHED_RACES } from "../../src/config/races.config.js";
 
 const SENATE_STATES = WATCHED_RACES.senate.map((r) => r.stateCode);
 
-const GROUPS = ["all", "core", "house", "races", "histories"];
+const DEFAULT_ORIGIN = "https://2026-election-tracker.vercel.app";
+
+// ?only= groups, sized so each invocation stays well under the 50-subrequest cap
+// even if the origin needs a retry. `all` (the default) warms everything in one
+// invocation (~32 fetches); the granular groups are a safety valve if the watched
+// state list grows or the origin gets slow.
+const GROUPS = ["all", "core", "races", "histories", "news"];
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -43,9 +45,28 @@ function countOf(data) {
   return data == null ? 0 : 1;
 }
 
+// Fetch JSON from the origin with a light retry (the origin is reliable, so this
+// is for transient hiccups/cold starts, not the upstream rate-limit storms the
+// direct path suffered). Don't retry 4xx other than 429.
+async function fetchJson(url, attempts = 2) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const r = await fetch(url, { headers: { Accept: "application/json" } });
+      if (r.ok) return r.json();
+      lastErr = new Error(`${url} -> ${r.status}`);
+      if (r.status < 500 && r.status !== 429) break;
+    } catch (e) {
+      lastErr = e;
+    }
+    if (i < attempts - 1) await sleep(400);
+  }
+  throw lastErr;
+}
+
 // Fetch one aggregate value and write it to KV as a { data, updatedAt } envelope
-// (so the read path can observe staleness). Never throws: a failed source is
-// recorded in the summary and the remaining sources still run/write.
+// (so the read path can observe staleness). Never throws: a failed key is recorded
+// in the summary and the remaining keys still run/write.
 async function writeKey(kv, summary, key, produce) {
   try {
     const data = await produce();
@@ -57,19 +78,17 @@ async function writeKey(kv, summary, key, produce) {
   }
 }
 
-// Build a { [stateCode]: value } aggregate by calling `fn` per state SEQUENTIALLY
-// (paced — one state's fetches finish before the next starts, so we never burst
-// the upstreams). Per-state try/catch records failures and keeps going, so the
-// returned object is whatever succeeded — even if a later state hits the 50-
-// subrequest cap, the prefix is preserved and the read path live-falls-back for
-// the rest.
-async function buildByState(label, states, fn, summary) {
+// Build a { [stateCode]: value } aggregate by hitting the origin's per-state route
+// for each senate state SEQUENTIALLY (paced). Per-state try/catch records failures
+// and keeps going, so the read path live-falls-back for any state we couldn't get.
+// The stored per-state value is exactly what the origin's /api/<route>?state=XX
+// returns — same shape getRace/getRaceHistory/getRaceNews produce — so the read
+// path indexes it directly.
+async function buildByState(origin, route, label, summary) {
   const out = {};
-  for (const st of states) {
+  for (const st of SENATE_STATES) {
     try {
-      const v = await fn(st);
-      if (v != null) out[st] = v;
-      else summary.failures.push(`${label}:${st}: null`);
+      out[st] = await fetchJson(`${origin}/api/${route}?state=${st}`);
     } catch (e) {
       summary.failures.push(`${label}:${st}: ${String(e?.message || e)}`);
     }
@@ -77,30 +96,25 @@ async function buildByState(label, states, fn, summary) {
   return out;
 }
 
-async function runGroup(group, env, kv, summary) {
+async function runGroup(group, origin, kv, summary) {
   const all = group === "all";
 
   if (all || group === "core") {
-    await writeKey(kv, summary, "control", () => getControl());
-    await writeKey(kv, summary, "control-history", () => getControlHistory());
-    await writeKey(kv, summary, "polls", () => getMacroPolls());
-    await writeKey(kv, summary, "race-polls", () => getAllRacePolls());
-  }
-  if (all || group === "house") {
-    await writeKey(kv, summary, "house-races", () => getAllHouseRaces());
+    // Origin endpoints that are already aggregated server-side -> one fetch each.
+    await writeKey(kv, summary, "control", () => fetchJson(`${origin}/api/control`));
+    await writeKey(kv, summary, "control-history", () => fetchJson(`${origin}/api/control-history`));
+    await writeKey(kv, summary, "polls", () => fetchJson(`${origin}/api/polls`));
+    await writeKey(kv, summary, "house-races", () => fetchJson(`${origin}/api/house-races`));
+    await writeKey(kv, summary, "race-polls", () => fetchJson(`${origin}/api/race-polls`));
   }
   if (all || group === "races") {
-    await writeKey(kv, summary, "races", () =>
-      buildByState("races", SENATE_STATES, (s) => getRace(s), summary)
-    );
-    await writeKey(kv, summary, "news", () =>
-      buildByState("news", SENATE_STATES, (s) => getRaceNews(s, env.NEWS_API_KEY), summary)
-    );
+    await writeKey(kv, summary, "races", () => buildByState(origin, "race", "races", summary));
   }
   if (all || group === "histories") {
-    await writeKey(kv, summary, "histories", () =>
-      buildByState("histories", SENATE_STATES, (s) => getRaceHistory(s), summary)
-    );
+    await writeKey(kv, summary, "histories", () => buildByState(origin, "history", "histories", summary));
+  }
+  if (all || group === "news") {
+    await writeKey(kv, summary, "news", () => buildByState(origin, "race-news", "news", summary));
   }
 }
 
@@ -119,6 +133,7 @@ export async function onRequest({ request, env }) {
   const kv = env?.MARKET_CACHE;
   if (!kv) return json({ error: "no MARKET_CACHE binding" }, 503);
 
+  const origin = (env.WARM_ORIGIN || DEFAULT_ORIGIN).replace(/\/+$/, "");
   const group = (url.searchParams.get("only") || "all").toLowerCase();
   if (!GROUPS.includes(group)) {
     return json({ error: `unknown group '${group}' (use ${GROUPS.join("|")})` }, 400);
@@ -126,15 +141,16 @@ export async function onRequest({ request, env }) {
 
   const summary = {
     group,
+    origin,
     startedAt: new Date().toISOString(),
     written: [],
     counts: {},
     failures: [],
   };
-  await runGroup(group, env, kv, summary);
+  await runGroup(group, origin, kv, summary);
   summary.finishedAt = new Date().toISOString();
 
-  // 207 (Multi-Status) when some sources failed but others were written, so the
-  // cron logs surface partial refreshes without treating them as total failures.
+  // 207 (Multi-Status) when some keys failed but others were written, so the cron
+  // logs surface partial refreshes without treating them as total failures.
   return json(summary, summary.failures.length ? 207 : 200);
 }

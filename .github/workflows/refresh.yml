@@ -2,10 +2,11 @@
 # Cloudflare Pages has no native cron, so a GitHub Actions schedule curls the
 # token-gated /api/refresh endpoint to keep KV warm independently of user traffic.
 #
-# The free Workers plan caps a single invocation at 50 subrequests, and a full warm
-# is ~100+ upstream fetches — so we hit each chunk (core/house/races/histories) as a
-# SEPARATE, SEQUENTIAL request. Separate requests => separate subrequest budgets;
-# sequential + a small pause => no burst against the rate-limited shared egress IP.
+# /api/refresh mirrors the already-assembled JSON from the clean-IP origin (the
+# Vercel deployment) into KV — one reliable fetch per key, so a full warm (?only=all,
+# the default) is ~32 fetches, comfortably under the free Workers 50-subrequest cap.
+# So this is a single request, not a per-chunk loop. (The endpoint still accepts
+# ?only=core|races|histories|news as a manual safety valve.)
 #
 # Setup (one-time): add a repo secret REFRESH_TOKEN equal to the Pages
 # REFRESH_TOKEN env var (Settings -> Secrets and variables -> Actions -> New
@@ -21,10 +22,10 @@ on:
     - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
-      groups:
-        description: "Space-separated groups to warm"
+      only:
+        description: "Which group to warm (all|core|races|histories|news)"
         required: false
-        default: "core house races histories"
+        default: "all"
 
 permissions:
   contents: read
@@ -41,31 +42,19 @@ jobs:
     env:
       BASE_URL: ${{ vars.PAGES_URL || 'https://2026-election-tracker.pages.dev' }}
       REFRESH_TOKEN: ${{ secrets.REFRESH_TOKEN }}
-      GROUPS: ${{ inputs.groups || 'core house races histories' }}
+      ONLY: ${{ inputs.only || 'all' }}
     steps:
-      - name: Warm KV (one request per group, sequential)
+      - name: Warm KV from the origin
         run: |
           set -uo pipefail
           if [ -z "${REFRESH_TOKEN:-}" ]; then
             echo "::error::REFRESH_TOKEN secret is not set in this repo"
             exit 1
           fi
-          fail=0
-          for group in $GROUPS; do
-            echo "::group::refresh only=$group"
-            # --fail-with-body: print the JSON summary, but exit non-zero on HTTP
-            # >=400 (401 bad token / 503 misconfig / 5xx). A 207 partial refresh is
-            # < 400, so it succeeds here but its failures[] is still printed.
-            if curl -sS --fail-with-body --max-time 120 \
-                 -H "X-Refresh-Token: $REFRESH_TOKEN" \
-                 "$BASE_URL/api/refresh?only=$group"; then
-              echo
-            else
-              echo
-              echo "::error::refresh group '$group' failed"
-              fail=1
-            fi
-            echo "::endgroup::"
-            sleep 5
-          done
-          exit $fail
+          # --fail-with-body: print the JSON summary, but exit non-zero on HTTP
+          # >=400 (401 bad token / 503 misconfig / 5xx). A 207 partial refresh is
+          # < 400, so it succeeds here but its failures[] is still printed.
+          curl -sS --fail-with-body --max-time 180 \
+            -H "X-Refresh-Token: $REFRESH_TOKEN" \
+            "$BASE_URL/api/refresh?only=$ONLY"
+          echo
