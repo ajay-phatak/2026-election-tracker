@@ -153,36 +153,24 @@ async function polymarketBySlug(slug, partyHints, opts) {
 // ---- Kalshi (live on the elections host w/ candlestick price + volume history) ----
 const KALSHI_ELECTIONS = "https://api.elections.kalshi.com/trade-api/v2";
 
-// The elections host rate-limits bursts (HTTP 429 after ~5 rapid requests). Serialize
-// requests through one chain and retry 429s with backoff. NOTE: the chain is a
-// module global, so on Cloudflare it only serializes within a single isolate — it
-// can't coordinate the cross-request burst the client fan-out creates. So we also
-// fail fast (few, short retries): a 429'd ticker returns null quickly rather than
-// blocking the response for seconds, and the edge cache fills it on a later call.
-// `retries`/`base` let callers tune the 429 policy: current-odds calls fire in the
-// on-load burst, so they fail fast (default); the heavy history pull is a single,
-// user-initiated (lazy) request with no burst, so it retries patiently to actually
-// land the candles rather than giving up and rendering an empty line.
-let kalshiChain = Promise.resolve();
-function kalshiFetch(url, { retries = 3, base = 150 } = {}) {
-  const exec = async () => {
-    for (let attempt = 0; attempt < retries; attempt++) {
-      const r = await edgeFetch(url, { headers: { "User-Agent": UA, Accept: "application/json" } });
-      if (r.status === 429) {
-        await sleep(backoff(base, attempt));
-        continue;
-      }
-      if (!r.ok) throw new Error(`${url} -> ${r.status}`);
-      return r.json();
+// The elections host rate-limits bursts (HTTP 429). We DON'T serialize through a
+// module-global chain: on Cloudflare that only orders requests within one isolate
+// (not the cross-request fan-out that actually causes the bursts), and it made the
+// first ticker in each pair absorb all the 429s while the second sailed through —
+// leaving one-sided odds (e.g. dem null, rep present). Instead each call retries
+// independently with jittered backoff. `retries`/`base` tune the policy per caller:
+// current-odds on the loading screen fail fast; background/lazy pulls are patient.
+async function kalshiFetch(url, { retries = 3, base = 150 } = {}) {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    const r = await edgeFetch(url, { headers: { "User-Agent": UA, Accept: "application/json" } });
+    if (r.status === 429) {
+      await sleep(backoff(base, attempt));
+      continue;
     }
-    throw new Error(`${url} -> 429 (retries exhausted)`);
-  };
-  const run = kalshiChain.then(exec, exec);
-  kalshiChain = run.then(
-    () => {},
-    () => {}
-  );
-  return run;
+    if (!r.ok) throw new Error(`${url} -> ${r.status}`);
+    return r.json();
+  }
+  throw new Error(`${url} -> 429 (retries exhausted)`);
 }
 
 // Daily candles for one Kalshi market -> [{ t, p (0-100), vol }]. Empty on failure.
