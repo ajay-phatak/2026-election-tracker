@@ -3,31 +3,39 @@
 // aggregate KV keys the read path in functions/api/[[route]].js serves from, so
 // user reads hit KV and scale independently of the rate-limited free upstreams.
 //
-// ORIGIN-MIRROR DESIGN: rather than fetch the upstreams (Kalshi/Polymarket/GNews)
-// directly — which from Cloudflare's shared, rate-limited egress IP fans each
-// logical fetch into many retried subrequests and blows the free Workers
-// 50-subrequest cap — we pull the already-assembled JSON from a clean-IP origin
-// that has done that work: the app's own Vercel deployment (whose egress isn't
-// rate-limited). Each KV key is then ONE reliable subrequest, so a full warm is
-// ~32 fetches (well under 50) with complete data. Vercel thus acts as the data
-// origin and Cloudflare as a cached global serving layer. WARM_ORIGIN overrides
-// the default origin (a Pages env var); no providers/keys are needed here — the
-// origin owns the upstream fetching and the NEWS_API_KEY.
+// MARKETS — ORIGIN-MIRROR: fetching Kalshi/Polymarket/VoteHub directly from the
+// warmer blows the free Workers 50-subrequest cap, because Cloudflare's shared,
+// rate-limited egress IP fans each fetch into many retried subrequests. So for the
+// market/poll keys we instead pull the already-assembled JSON from a clean-IP
+// origin that has done that work — the app's Vercel deployment, whose egress isn't
+// rate-limited. Each key is then one reliable subrequest. WARM_ORIGIN overrides the
+// default origin (a Pages env var).
+//
+// NEWS — DIRECT, SLOW: news is the opposite case. GNews is key-based and NOT
+// IP-rate-limited (that's why the app moved off the IP-blocked Google RSS), but it
+// has a hard ~100 requests/day free quota. So news is fetched DIRECTLY here with
+// Cloudflare's own NEWS_API_KEY (no dependency on the origin having a news key) and
+// warmed on a SEPARATE, infrequent schedule (the cron's `news` group, ~every 3h =
+// 9 states x 8 = ~72 calls/day, under quota). Warming 9 states every 15 min would
+// have blown the quota. A guard keeps the last-good news in KV if a whole run comes
+// back empty (transient GNews failure), so it never wipes good data.
 //
 // Pages routes this static file ahead of the [[route]] catch-all, so /api/refresh
 // lands here.
 
 import { WATCHED_RACES } from "../../src/config/races.config.js";
+import { getRaceNews } from "../../api/_news.js";
 
 const SENATE_STATES = WATCHED_RACES.senate.map((r) => r.stateCode);
 
 const DEFAULT_ORIGIN = "https://2026-election-tracker.vercel.app";
 
-// ?only= groups, sized so each invocation stays well under the 50-subrequest cap
-// even if the origin needs a retry. `all` (the default) warms everything in one
-// invocation (~32 fetches); the granular groups are a safety valve if the watched
-// state list grows or the origin gets slow.
-const GROUPS = ["all", "core", "races", "histories", "news"];
+// ?only= groups. `markets` = everything the origin serves (core + races +
+// histories), warmed frequently. `news` is warmed on its own slow schedule. `all`
+// = markets + news (for a manual/local full warm). The granular core/races/
+// histories groups remain as a safety valve. Each group stays well under the
+// 50-subrequest cap.
+const GROUPS = ["all", "markets", "core", "races", "histories", "news"];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -78,17 +86,18 @@ async function writeKey(kv, summary, key, produce) {
   }
 }
 
-// Build a { [stateCode]: value } aggregate by hitting the origin's per-state route
-// for each senate state SEQUENTIALLY (paced). Per-state try/catch records failures
-// and keeps going, so the read path live-falls-back for any state we couldn't get.
-// The stored per-state value is exactly what the origin's /api/<route>?state=XX
-// returns — same shape getRace/getRaceHistory/getRaceNews produce — so the read
-// path indexes it directly.
-async function buildByState(origin, route, label, summary) {
+// Build a { [stateCode]: value } aggregate by calling `perState` for each senate
+// state SEQUENTIALLY (paced). Per-state try/catch records failures and keeps going,
+// so the read path live-falls-back for any state we couldn't get. The stored value
+// is exactly what the per-state route/provider returns, so the read path indexes
+// it directly.
+async function buildByState(label, perState, summary) {
   const out = {};
   for (const st of SENATE_STATES) {
     try {
-      out[st] = await fetchJson(`${origin}/api/${route}?state=${st}`);
+      const v = await perState(st);
+      if (v != null) out[st] = v;
+      else summary.failures.push(`${label}:${st}: null`);
     } catch (e) {
       summary.failures.push(`${label}:${st}: ${String(e?.message || e)}`);
     }
@@ -96,10 +105,11 @@ async function buildByState(origin, route, label, summary) {
   return out;
 }
 
-async function runGroup(group, origin, kv, summary) {
-  const all = group === "all";
+async function runGroup(group, origin, newsKey, kv, summary) {
+  // `markets` (and `all`) warm everything the origin serves; news is separate.
+  const markets = group === "all" || group === "markets";
 
-  if (all || group === "core") {
+  if (markets || group === "core") {
     // Origin endpoints that are already aggregated server-side -> one fetch each.
     await writeKey(kv, summary, "control", () => fetchJson(`${origin}/api/control`));
     await writeKey(kv, summary, "control-history", () => fetchJson(`${origin}/api/control-history`));
@@ -107,14 +117,28 @@ async function runGroup(group, origin, kv, summary) {
     await writeKey(kv, summary, "house-races", () => fetchJson(`${origin}/api/house-races`));
     await writeKey(kv, summary, "race-polls", () => fetchJson(`${origin}/api/race-polls`));
   }
-  if (all || group === "races") {
-    await writeKey(kv, summary, "races", () => buildByState(origin, "race", "races", summary));
+  if (markets || group === "races") {
+    await writeKey(kv, summary, "races", () =>
+      buildByState("races", (st) => fetchJson(`${origin}/api/race?state=${st}`), summary)
+    );
   }
-  if (all || group === "histories") {
-    await writeKey(kv, summary, "histories", () => buildByState(origin, "history", "histories", summary));
+  if (markets || group === "histories") {
+    await writeKey(kv, summary, "histories", () =>
+      buildByState("histories", (st) => fetchJson(`${origin}/api/history?state=${st}`), summary)
+    );
   }
-  if (all || group === "news") {
-    await writeKey(kv, summary, "news", () => buildByState(origin, "race-news", "news", summary));
+  if (group === "all" || group === "news") {
+    // News is fetched DIRECTLY from GNews with Cloudflare's own key (not via the
+    // origin) and is rate-limited by quota, so it runs on its own slow schedule.
+    const news = await buildByState("news", (st) => getRaceNews(st, newsKey), summary);
+    const hasAny = Object.values(news).some((d) => (d?.articles?.length || 0) > 0);
+    if (hasAny) {
+      await writeKey(kv, summary, "news", async () => news);
+    } else {
+      // Whole run came back empty -> almost certainly a transient GNews failure or
+      // a missing key, not 9 genuinely newsless races. Keep the last-good KV value.
+      summary.failures.push("news: all states empty — kept previous KV value (verify NEWS_API_KEY)");
+    }
   }
 }
 
@@ -147,7 +171,7 @@ export async function onRequest({ request, env }) {
     counts: {},
     failures: [],
   };
-  await runGroup(group, origin, kv, summary);
+  await runGroup(group, origin, env.NEWS_API_KEY, kv, summary);
   summary.finishedAt = new Date().toISOString();
 
   // 207 (Multi-Status) when some keys failed but others were written, so the cron

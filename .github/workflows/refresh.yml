@@ -2,11 +2,14 @@
 # Cloudflare Pages has no native cron, so a GitHub Actions schedule curls the
 # token-gated /api/refresh endpoint to keep KV warm independently of user traffic.
 #
-# /api/refresh mirrors the already-assembled JSON from the clean-IP origin (the
-# Vercel deployment) into KV — one reliable fetch per key, so a full warm (?only=all,
-# the default) is ~32 fetches, comfortably under the free Workers 50-subrequest cap.
-# So this is a single request, not a per-chunk loop. (The endpoint still accepts
-# ?only=core|races|histories|news as a manual safety valve.)
+# Two schedules feed one endpoint:
+#   - every 15 min  -> ?only=markets  (control/odds/polls/history, mirrored from the
+#                      clean-IP origin; ~23 reliable fetches, well under the 50-
+#                      subrequest cap)
+#   - every 3 hours -> ?only=news     (fetched directly from GNews with Cloudflare's
+#                      NEWS_API_KEY; kept slow so 9 states x 8/day stays under GNews'
+#                      ~100 req/day free quota)
+# Manual runs (workflow_dispatch) default to ?only=all (markets + news).
 #
 # Setup (one-time): add a repo secret REFRESH_TOKEN equal to the Pages
 # REFRESH_TOKEN env var (Settings -> Secrets and variables -> Actions -> New
@@ -17,13 +20,15 @@ name: Refresh KV cache
 
 on:
   schedule:
-    # Every 15 min. GitHub cron is best-effort and can run several minutes late
-    # under load — fine for slow-moving odds (KV's read path live-falls-back).
+    # Markets: every 15 min. GitHub cron is best-effort and can run several minutes
+    # late under load — fine for slow-moving odds (KV's read path live-falls-back).
     - cron: "*/15 * * * *"
+    # News: every 3 hours, offset to :07 so it never lands on a markets tick.
+    - cron: "7 */3 * * *"
   workflow_dispatch:
     inputs:
       only:
-        description: "Which group to warm (all|core|races|histories|news)"
+        description: "Which group to warm (all|markets|core|races|histories|news)"
         required: false
         default: "all"
 
@@ -42,9 +47,11 @@ jobs:
     env:
       BASE_URL: ${{ vars.PAGES_URL || 'https://2026-election-tracker.pages.dev' }}
       REFRESH_TOKEN: ${{ secrets.REFRESH_TOKEN }}
-      ONLY: ${{ inputs.only || 'all' }}
+      # Manual run -> the chosen input; news schedule -> news; markets schedule (or
+      # anything else) -> markets.
+      ONLY: ${{ inputs.only || (github.event.schedule == '7 */3 * * *' && 'news' || 'markets') }}
     steps:
-      - name: Warm KV from the origin
+      - name: Warm KV (${{ env.ONLY }})
         run: |
           set -uo pipefail
           if [ -z "${REFRESH_TOKEN:-}" ]; then
