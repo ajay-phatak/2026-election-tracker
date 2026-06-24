@@ -32,7 +32,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // patiently so their data actually lands despite Cloudflare's shared-IP rate
 // limiting — fail-fast there was leaving odds null and most house seats empty.
 const FAST = { retries: 3, base: 150 };
-const PATIENT = { retries: 6, base: 300 };
+const PATIENT = { retries: 8, base: 300 };
+// Backoff with jitter so concurrent requests (the prefetch fan-out) stop retrying
+// in lockstep and repeatedly colliding on the same rate-limit window.
+const backoff = (base, attempt) => base * (attempt + 1) + Math.floor(Math.random() * base);
 
 // Edge-cache successful upstream GETs (Cloudflare Workers `caches`; a plain
 // fetch in Node / local dev). Only 2xx responses are stored, so a rate-limit
@@ -77,7 +80,7 @@ async function getJson(url, { retries = PATIENT.retries, base = PATIENT.base } =
     // Polymarket rate-limits bursts (429/403); retry transient failures with
     // backoff so the house batch and race odds land instead of dropping to null.
     if (attempt < retries - 1 && (r.status === 429 || r.status === 403 || r.status >= 500)) {
-      await sleep(base * (attempt + 1));
+      await sleep(backoff(base, attempt));
       continue;
     }
     throw new Error(`${url} -> ${r.status}`);
@@ -166,7 +169,7 @@ function kalshiFetch(url, { retries = 3, base = 150 } = {}) {
     for (let attempt = 0; attempt < retries; attempt++) {
       const r = await edgeFetch(url, { headers: { "User-Agent": UA, Accept: "application/json" } });
       if (r.status === 429) {
-        await sleep(base * (attempt + 1));
+        await sleep(backoff(base, attempt));
         continue;
       }
       if (!r.ok) throw new Error(`${url} -> ${r.status}`);
@@ -230,10 +233,9 @@ async function kalshiCandleHistory(cfg) {
   if (!cfg) return { points: [], hasData: false };
   // Lazy, user-initiated request (no burst) -> retry patiently so the candle
   // history actually lands instead of failing fast to an empty line.
-  const patient = { retries: 6, base: 300 };
   const [dem, rep] = await Promise.all([
-    kalshiCandles(cfg.series, cfg.demTicker, patient),
-    kalshiCandles(cfg.series, cfg.repTicker, patient),
+    kalshiCandles(cfg.series, cfg.demTicker, PATIENT),
+    kalshiCandles(cfg.series, cfg.repTicker, PATIENT),
   ]);
   const day = (t) => Math.floor(t / 86400) * 86400;
   const demByT = new Map(dem.map((x) => [day(x.t), x]));
