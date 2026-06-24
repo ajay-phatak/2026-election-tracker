@@ -34,8 +34,12 @@ function newsConfig(race) {
   }
   const hasName = race.incumbent && !/open/i.test(race.incumbent);
   if (hasName) {
-    const surname = race.incumbent.split(" ").pop();
-    return { query: race.incumbent, rel: surname };
+    // Strip a generational suffix (Jr./Sr./II/III/IV) first: GNews ANDs every term,
+    // so "Tom Kean Jr." over-constrains toward zero results, and split().pop() would
+    // make the relevance term "Jr." instead of the surname. Query "Tom Kean" / "Kean".
+    const name = race.incumbent.replace(/\s+(jr|sr|ii|iii|iv)\.?$/i, "").trim();
+    const surname = name.split(" ").pop();
+    return { query: name, rel: surname };
   }
   const num = Number(race.district.split("-")[1]);
   return { query: `${race.state} ${ordinal(num)} district`, rel: race.state };
@@ -59,7 +63,13 @@ function normalize(articles, rel) {
     .map(({ title, link, source, publishedAt }) => ({ title, link, source, publishedAt }));
 }
 
-export async function getRaceNews(code, apiKey) {
+// `strict` (used by the scheduled warmer) makes a missing key / non-OK GNews
+// response THROW instead of degrading to an empty list. That lets the warmer
+// distinguish a real failure (e.g. GNews rate-limiting a burst of requests with
+// 429) — which is worth retrying — from a genuine no-news 200, which isn't. The
+// default (non-strict) keeps the graceful-empty behavior the read-path live
+// fallback and local dev rely on.
+export async function getRaceNews(code, apiKey, { strict = false } = {}) {
   const race = [...WATCHED_RACES.senate, ...(WATCHED_RACES.house || [])].find(
     (r) => (r.code ?? r.stateCode) === code
   );
@@ -67,7 +77,10 @@ export async function getRaceNews(code, apiKey) {
 
   const empty = { stateCode: code, articles: [], lastUpdated: null };
   // No key configured -> degrade gracefully (local dev, or before the Pages env var is set).
-  if (!apiKey) return empty;
+  if (!apiKey) {
+    if (strict) throw new Error("no NEWS_API_KEY");
+    return empty;
+  }
 
   try {
     const { query, rel } = newsConfig(race);
@@ -76,7 +89,10 @@ export async function getRaceNews(code, apiKey) {
       `${GNEWS}?q=${encodeURIComponent(query)}` +
       `&lang=en&country=us&max=${MAX_ARTICLES}&apikey=${apiKey}`;
     const r = await fetch(url, { headers: { Accept: "application/json" } });
-    if (!r.ok) return empty;
+    if (!r.ok) {
+      if (strict) throw new Error(`gnews ${r.status}`);
+      return empty;
+    }
     const data = await r.json();
     const articles = normalize(data.articles, rel);
     return {
@@ -84,7 +100,8 @@ export async function getRaceNews(code, apiKey) {
       articles,
       lastUpdated: articles.length ? new Date().toISOString() : null,
     };
-  } catch {
+  } catch (e) {
+    if (strict) throw e;
     return empty;
   }
 }

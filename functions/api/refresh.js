@@ -105,6 +105,22 @@ async function buildByState(label, perState, summary) {
   return out;
 }
 
+// GNews' free tier rate-limits bursts: in a rapid sequence only the first request
+// lands and the rest 429. So fetch news for one state with strict mode (throws on a
+// 429 instead of swallowing it to empty) and retry with backoff. The caller also
+// paces between states; this retry just catches stragglers.
+async function newsForState(st, newsKey) {
+  const RETRIES = 3;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await getRaceNews(st, newsKey, { strict: true });
+    } catch (e) {
+      if (attempt >= RETRIES) throw e;
+      await sleep(1200 * (attempt + 1) + Math.floor(Math.random() * 400));
+    }
+  }
+}
+
 async function runGroup(group, origin, newsKey, kv, summary) {
   // `markets` (and `all`) warm everything the origin serves; news is separate.
   const markets = group === "all" || group === "markets";
@@ -129,8 +145,19 @@ async function runGroup(group, origin, newsKey, kv, summary) {
   }
   if (group === "all" || group === "news") {
     // News is fetched DIRECTLY from GNews with Cloudflare's own key (not via the
-    // origin) and is rate-limited by quota, so it runs on its own slow schedule.
-    const news = await buildByState("news", (st) => getRaceNews(st, newsKey), summary);
+    // origin), and GNews 429s rapid bursts, so walk the states SEQUENTIALLY with a
+    // pause between each so every call lands (vs. only the first one). This runs on
+    // its own slow ~3h schedule so the ~9 calls/run stay under GNews' daily quota.
+    const news = {};
+    for (let i = 0; i < SENATE_STATES.length; i++) {
+      const st = SENATE_STATES[i];
+      if (i > 0) await sleep(1200); // pace so we stay under GNews' per-second/burst limit
+      try {
+        news[st] = await newsForState(st, newsKey);
+      } catch (e) {
+        summary.failures.push(`news:${st}: ${String(e?.message || e)}`);
+      }
+    }
     const hasAny = Object.values(news).some((d) => (d?.articles?.length || 0) > 0);
     if (hasAny) {
       await writeKey(kv, summary, "news", async () => news);
