@@ -25,13 +25,22 @@ const PM_BASE = "https://gamma-api.polymarket.com";
 // Polymarket 403s requests without a UA header.
 const UA = "2026-election-tracker/1.0 (dashboard)";
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// 429/rate-limit retry policies. Only the loading-screen path (getControl) fails
+// fast; the background/lazy paths (race odds, house batch, history) retry
+// patiently so their data actually lands despite Cloudflare's shared-IP rate
+// limiting — fail-fast there was leaving odds null and most house seats empty.
+const FAST = { retries: 3, base: 150 };
+const PATIENT = { retries: 6, base: 300 };
+
 // Edge-cache successful upstream GETs (Cloudflare Workers `caches`; a plain
 // fetch in Node / local dev). Only 2xx responses are stored, so a rate-limit
 // 429 never poisons a key — failures simply fall through and are retried on the
 // next call. This lets the same market data be reused across the race / history
 // / control endpoints and the client's prefetch burst instead of re-hitting
 // (and tripping the rate limits of) Kalshi and Polymarket.
-const EDGE_TTL = 300;
+const EDGE_TTL = 900;
 async function edgeFetch(url, init) {
   const cache = typeof caches !== "undefined" ? caches.default : null;
   if (!cache) return fetch(url, init);
@@ -61,10 +70,18 @@ async function edgeFetch(url, init) {
   return new Response(body, { status: 200, headers });
 }
 
-async function getJson(url) {
-  const r = await edgeFetch(url, { headers: { "User-Agent": UA, Accept: "application/json" } });
-  if (!r.ok) throw new Error(`${url} -> ${r.status}`);
-  return r.json();
+async function getJson(url, { retries = PATIENT.retries, base = PATIENT.base } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    const r = await edgeFetch(url, { headers: { "User-Agent": UA, Accept: "application/json" } });
+    if (r.ok) return r.json();
+    // Polymarket rate-limits bursts (429/403); retry transient failures with
+    // backoff so the house batch and race odds land instead of dropping to null.
+    if (attempt < retries - 1 && (r.status === 429 || r.status === 403 || r.status >= 500)) {
+      await sleep(base * (attempt + 1));
+      continue;
+    }
+    throw new Error(`${url} -> ${r.status}`);
+  }
 }
 
 // 0-1 probability -> 0-100 with one decimal.
@@ -107,10 +124,10 @@ function marketYes(m) {
   }
 }
 
-async function polymarketBySlug(slug, partyHints) {
+async function polymarketBySlug(slug, partyHints, opts) {
   if (!slug) return { demYes: null, repYes: null };
   try {
-    const data = await getJson(`${PM_BASE}/events?slug=${encodeURIComponent(slug)}`);
+    const data = await getJson(`${PM_BASE}/events?slug=${encodeURIComponent(slug)}`, opts);
     const ev = Array.isArray(data) ? data[0] : null;
     if (!ev || !ev.markets) return { demYes: null, repYes: null };
 
@@ -132,7 +149,6 @@ async function polymarketBySlug(slug, partyHints) {
 
 // ---- Kalshi (live on the elections host w/ candlestick price + volume history) ----
 const KALSHI_ELECTIONS = "https://api.elections.kalshi.com/trade-api/v2";
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // The elections host rate-limits bursts (HTTP 429 after ~5 rapid requests). Serialize
 // requests through one chain and retry 429s with backoff. NOTE: the chain is a
@@ -197,11 +213,11 @@ function kalshiCfgForRace(race) {
 }
 
 // Current Kalshi odds from the latest candle close (control markets + state races).
-async function kalshiCandleOdds(cfg) {
+async function kalshiCandleOdds(cfg, opts) {
   if (!cfg) return { demYes: null, repYes: null };
   const [dem, rep] = await Promise.all([
-    kalshiCandles(cfg.series, cfg.demTicker, { days: 10 }),
-    kalshiCandles(cfg.series, cfg.repTicker, { days: 10 }),
+    kalshiCandles(cfg.series, cfg.demTicker, { days: 10, ...opts }),
+    kalshiCandles(cfg.series, cfg.repTicker, { days: 10, ...opts }),
   ]);
   return {
     demYes: dem.length ? dem[dem.length - 1].p : null,
@@ -232,12 +248,13 @@ async function kalshiCandleHistory(cfg) {
 }
 
 // ---- Compose ------------------------------------------------------------
-// Build the two-source { polymarket, kalshi } current-odds shape.
-async function buildSourcesFrom(polymarketSlug, kalshiCfg, partyHints) {
+// Build the two-source { polymarket, kalshi } current-odds shape. `opts` is the
+// retry policy: PATIENT by default (background/lazy callers), FAST for getControl.
+async function buildSourcesFrom(polymarketSlug, kalshiCfg, partyHints, opts = PATIENT) {
   const now = new Date().toISOString();
   const [pm, ks] = await Promise.all([
-    polymarketBySlug(polymarketSlug, partyHints),
-    kalshiCandleOdds(kalshiCfg),
+    polymarketBySlug(polymarketSlug, partyHints, opts),
+    kalshiCandleOdds(kalshiCfg, opts),
   ]);
   const mk = (id, label, r) => ({
     id,
@@ -250,9 +267,12 @@ async function buildSourcesFrom(polymarketSlug, kalshiCfg, partyHints) {
 }
 
 export async function getControl() {
+  // FAST: this is the only loading-screen-blocking call, so don't let a rate-
+  // limited Kalshi ticker stall the render — Polymarket (the default source) is
+  // shown immediately and Kalshi fills from cache on a later request.
   const [senate, house] = await Promise.all([
-    buildSourcesFrom(CONTROL_MARKETS.senate.polymarketSlug, CONTROL_MARKETS.senate.kalshi),
-    buildSourcesFrom(CONTROL_MARKETS.house.polymarketSlug, CONTROL_MARKETS.house.kalshi),
+    buildSourcesFrom(CONTROL_MARKETS.senate.polymarketSlug, CONTROL_MARKETS.senate.kalshi, undefined, FAST),
+    buildSourcesFrom(CONTROL_MARKETS.house.polymarketSlug, CONTROL_MARKETS.house.kalshi, undefined, FAST),
   ]);
   return { senate, house };
 }
@@ -268,17 +288,31 @@ export async function getRace(stateCode) {
   return { stateCode, sources };
 }
 
+// Run `fn` over `items` with at most `limit` in flight, so a 30+-wide fan-out
+// doesn't burst the upstream (which then rate-limits the shared Cloudflare IP).
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
 // Batched current odds for every watched House district -> { "CA-41": { sources }, ... }.
 // One client fetch fans out here (mirrors getAllRacePolls), Polymarket-only since
-// House districts have no liquid Kalshi markets.
+// House districts have no liquid Kalshi markets. Concurrency-capped + patient
+// retries so all ~37 districts land instead of bursting Polymarket into 429s.
 export async function getAllHouseRaces() {
   const races = WATCHED_RACES.house || [];
-  const entries = await Promise.all(
-    races.map(async (race) => {
-      const { sources } = await buildSourcesFrom(race.polymarketSlug, null, race.pollParties);
-      return [race.code, { code: race.code, sources }];
-    })
-  );
+  const entries = await mapLimit(races, 6, async (race) => {
+    const { sources } = await buildSourcesFrom(race.polymarketSlug, null, race.pollParties);
+    return [race.code, { code: race.code, sources }];
+  });
   return Object.fromEntries(entries);
 }
 
