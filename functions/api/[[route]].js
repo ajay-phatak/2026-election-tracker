@@ -28,23 +28,29 @@ function json(data, { status = 200, cache } = {}) {
 const missingState = () => json({ error: "missing ?state=" }, { status: 400 });
 const unknownState = (state) => json({ error: `unknown state ${state}` }, { status: 404 });
 
-// Read an aggregate key from Workers KV. The scheduled warmer (/api/refresh)
-// stores each value as a { data, updatedAt } envelope; this returns the `data`,
-// or undefined when there's nothing usable to serve — i.e. the binding is absent
-// (local Vite dev has no env), the key is cold (before the first refresh), or the
-// value can't be parsed. Every caller falls back to a live provider call in those
-// cases, so a missing/empty KV never blanks a response.
-async function kvGet(env, key) {
+// Read an aggregate key's { data, updatedAt } envelope from Workers KV (written
+// by the scheduled warmer, /api/refresh). Returns undefined when there's nothing
+// usable to serve — i.e. the binding is absent (local Vite dev has no env), the
+// key is cold (before the first refresh), or the value can't be parsed. Every
+// caller falls back to a live provider call in those cases, so a missing/empty
+// KV never blanks a response.
+async function kvGetEnvelope(env, key) {
   const kv = env?.MARKET_CACHE;
   if (!kv) return undefined;
   try {
     const raw = await kv.get(key);
     if (!raw) return undefined;
     const parsed = JSON.parse(raw);
-    return parsed?.data;
+    return parsed && typeof parsed === "object" ? parsed : undefined;
   } catch {
     return undefined;
   }
+}
+
+// Just the `data` out of the envelope (what every route serves).
+async function kvGet(env, key) {
+  const envelope = await kvGetEnvelope(env, key);
+  return envelope?.data;
 }
 
 // Serve an aggregate route from KV when warm, else fall back to its live provider
@@ -74,36 +80,75 @@ export async function onRequestGet({ request, env }) {
 
   try {
     switch (route) {
+      // One-shot first-paint payload: everything the client prefetches on load,
+      // composed by the warmer into the `bootstrap` KV key. Serving it as a single
+      // request (1 invocation + 1 KV read) instead of ~13 is what keeps the free
+      // Pages/KV daily quotas viable under real traffic. If the composed key is
+      // cold, compose from the individual aggregate keys; if those are cold too,
+      // 503 — the client then falls back to the per-piece endpoints (each of which
+      // live-falls-back on its own), so nothing goes blank. No live composition
+      // here: assembling every upstream in one invocation would burst the
+      // 50-subrequest cap. (Local dev never reaches this file — the Vite
+      // middleware serves api/bootstrap.js, which composes live.)
+      case "bootstrap": {
+        const cache = "public, max-age=60, s-maxage=60, stale-while-revalidate=300";
+        const envelope = await kvGetEnvelope(env, "bootstrap");
+        if (envelope?.data) {
+          return json({ ...envelope.data, updatedAt: envelope.updatedAt ?? null }, { cache });
+        }
+        const [control, polls, racePolls, houseRaces, races] = await Promise.all([
+          kvGet(env, "control"),
+          kvGet(env, "polls"),
+          kvGet(env, "race-polls"),
+          kvGet(env, "house-races"),
+          kvGet(env, "races"),
+        ]);
+        if ([control, polls, racePolls, houseRaces, races].every((v) => v === undefined)) {
+          return json({ error: "bootstrap not warmed yet" }, { status: 503 });
+        }
+        return json(
+          {
+            control: control ?? null,
+            polls: polls ?? null,
+            racePolls: racePolls ?? null,
+            houseRaces: houseRaces ?? null,
+            races: races ?? null,
+            updatedAt: null,
+          },
+          { cache }
+        );
+      }
+
       case "control":
         return json(await served(env, "control", getControl), {
-          cache: "s-maxage=60, stale-while-revalidate=300",
+          cache: "public, max-age=60, s-maxage=60, stale-while-revalidate=300",
         });
 
       case "control-history":
         return json(await served(env, "control-history", getControlHistory), {
-          cache: "s-maxage=300, stale-while-revalidate=900",
+          cache: "public, max-age=300, s-maxage=300, stale-while-revalidate=900",
         });
 
       case "polls":
         return json(await served(env, "polls", getMacroPolls), {
-          cache: "s-maxage=1800, stale-while-revalidate=3600",
+          cache: "public, max-age=900, s-maxage=1800, stale-while-revalidate=3600",
         });
 
       case "house-races":
         return json(await served(env, "house-races", getAllHouseRaces), {
-          cache: "s-maxage=300, stale-while-revalidate=600",
+          cache: "public, max-age=300, s-maxage=300, stale-while-revalidate=600",
         });
 
       case "race-polls": {
         // No ?state= returns every state in one shot; ?state=GA returns just that one.
         if (!state) {
           return json(await served(env, "race-polls", getAllRacePolls), {
-            cache: "s-maxage=1800, stale-while-revalidate=3600",
+            cache: "public, max-age=900, s-maxage=1800, stale-while-revalidate=3600",
           });
         }
         const data = await fromAgg("race-polls", () => getRacePolls(state));
         return data
-          ? json(data, { cache: "s-maxage=1800, stale-while-revalidate=3600" })
+          ? json(data, { cache: "public, max-age=900, s-maxage=1800, stale-while-revalidate=3600" })
           : unknownState(state);
       }
 
@@ -111,7 +156,7 @@ export async function onRequestGet({ request, env }) {
         if (!state) return missingState();
         const data = await fromAgg("races", () => getRace(state));
         return data
-          ? json(data, { cache: "s-maxage=60, stale-while-revalidate=300" })
+          ? json(data, { cache: "public, max-age=60, s-maxage=60, stale-while-revalidate=300" })
           : unknownState(state);
       }
 
@@ -119,7 +164,7 @@ export async function onRequestGet({ request, env }) {
         if (!state) return missingState();
         const data = await fromAgg("histories", () => getRaceHistory(state));
         return data
-          ? json(data, { cache: "s-maxage=300, stale-while-revalidate=900" })
+          ? json(data, { cache: "public, max-age=300, s-maxage=300, stale-while-revalidate=900" })
           : unknownState(state);
       }
 
@@ -127,7 +172,7 @@ export async function onRequestGet({ request, env }) {
         if (!state) return missingState();
         const data = await fromAgg("news", () => getRaceNews(state, env.NEWS_API_KEY));
         return data
-          ? json(data, { cache: "s-maxage=1800, stale-while-revalidate=3600" })
+          ? json(data, { cache: "public, max-age=900, s-maxage=1800, stale-while-revalidate=3600" })
           : unknownState(state);
       }
 

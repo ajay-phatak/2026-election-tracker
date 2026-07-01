@@ -74,15 +74,18 @@ async function fetchJson(url, attempts = 2) {
 
 // Fetch one aggregate value and write it to KV as a { data, updatedAt } envelope
 // (so the read path can observe staleness). Never throws: a failed key is recorded
-// in the summary and the remaining keys still run/write.
+// in the summary and the remaining keys still run/write. Returns the data on
+// success (so callers can compose the bootstrap key from it), undefined on failure.
 async function writeKey(kv, summary, key, produce) {
   try {
     const data = await produce();
     await kv.put(key, JSON.stringify({ data, updatedAt: Date.now() }));
     summary.written.push(key);
     summary.counts[key] = countOf(data);
+    return data;
   } catch (e) {
     summary.failures.push(`${key}: ${String(e?.message || e)}`);
+    return undefined;
   }
 }
 
@@ -125,18 +128,43 @@ async function runGroup(group, origin, newsKey, kv, summary) {
   // `markets` (and `all`) warm everything the origin serves; news is separate.
   const markets = group === "all" || group === "markets";
 
+  // First-paint pieces captured as they're warmed, then composed into the
+  // `bootstrap` KV key below so the client's initial load is ONE request
+  // (/api/bootstrap) instead of ~13. control-history/histories/news stay out —
+  // the client loads those lazily.
+  const pieces = {};
+
   if (markets || group === "core") {
     // Origin endpoints that are already aggregated server-side -> one fetch each.
-    await writeKey(kv, summary, "control", () => fetchJson(`${origin}/api/control`));
+    pieces.control = await writeKey(kv, summary, "control", () => fetchJson(`${origin}/api/control`));
     await writeKey(kv, summary, "control-history", () => fetchJson(`${origin}/api/control-history`));
-    await writeKey(kv, summary, "polls", () => fetchJson(`${origin}/api/polls`));
-    await writeKey(kv, summary, "house-races", () => fetchJson(`${origin}/api/house-races`));
-    await writeKey(kv, summary, "race-polls", () => fetchJson(`${origin}/api/race-polls`));
+    pieces.polls = await writeKey(kv, summary, "polls", () => fetchJson(`${origin}/api/polls`));
+    pieces.houseRaces = await writeKey(kv, summary, "house-races", () => fetchJson(`${origin}/api/house-races`));
+    pieces.racePolls = await writeKey(kv, summary, "race-polls", () => fetchJson(`${origin}/api/race-polls`));
   }
   if (markets || group === "races") {
-    await writeKey(kv, summary, "races", () =>
+    pieces.races = await writeKey(kv, summary, "races", () =>
       buildByState("races", (st) => fetchJson(`${origin}/api/race?state=${st}`), summary)
     );
+  }
+  if (markets || group === "core" || group === "races") {
+    // Merge this run's pieces over the previous bootstrap value so a piece that
+    // failed this run (or a granular core/races-only run) never wipes a
+    // previously-good piece. Empty results count as failed, same idea as the
+    // news last-good guard.
+    await writeKey(kv, summary, "bootstrap", async () => {
+      let prev = {};
+      try {
+        prev = JSON.parse(await kv.get("bootstrap"))?.data || {};
+      } catch {
+        // no/unreadable previous value -> start fresh
+      }
+      const merged = { ...prev };
+      for (const [k, v] of Object.entries(pieces)) {
+        if (v != null && countOf(v) > 0) merged[k] = v;
+      }
+      return merged;
+    });
   }
   if (markets || group === "histories") {
     await writeKey(kv, summary, "histories", () =>
