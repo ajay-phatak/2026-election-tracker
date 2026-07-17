@@ -4,8 +4,10 @@ import USMap from "./components/USMap";
 import HouseSection from "./components/HouseSection";
 import RaceDrawer from "./components/RaceDrawer";
 import LoadingScreen from "./components/LoadingScreen";
+import AdSlot from "./components/AdSlot";
 import { prefetchRaces } from "./lib/api";
 import { WATCHED_RACES } from "./config/races.config";
+import { AD_SLOTS } from "./config/ads.config";
 
 export default function App() {
   const [selectedCode, setSelectedCode] = useState(null);
@@ -50,11 +52,21 @@ export default function App() {
         <USMap onSelectRace={setSelectedCode} />
       </main>
 
+      <AdSlot slot={AD_SLOTS.belowMap} />
+
       {/* House — overview + competitive-district watchlist */}
       <HouseSection onSelectRace={setSelectedCode} />
 
+      <AdSlot slot={AD_SLOTS.aboveFooter} />
+
       <footer className="text-center text-[10px] uppercase tracking-widest text-ops-muted/50">
-        For reference only · not affiliated with any campaign
+        For reference only · not affiliated with any campaign ·{" "}
+        <a
+          href="https://ajaycent.com/privacy/"
+          className="underline decoration-ops-muted/40 underline-offset-2 hover:text-ops-muted"
+        >
+          Privacy
+        </a>
       </footer>
 
       <RaceDrawer
