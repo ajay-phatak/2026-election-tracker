@@ -1,13 +1,20 @@
 // VoteHub polling proxy + normalization. Framework-agnostic (plain async + global
 // fetch) so it runs both as a Vercel function and under the Vite dev middleware.
 //
-// We compute simple trailing averages ourselves (VoteHub serves raw polls; its
-// /averages endpoint 500s). Each result also carries a rolling-average `trend`
-// series for the click-to-expand history charts.
+// VoteHub runs two API hosts, and as of July 2026 neither covers everything:
+//   - polling.votehub.com (current) — official time-weighted averages with daily
+//     values; fresh for generic ballot + Trump approval, but its us-senator feed
+//     lacks the 2026 general-election races.
+//   - api.votehub.com (legacy) — raw polls; stopped ingesting generic-ballot and
+//     approval polls ~2026-06-30 but still updates us-senator.
+// So macro numbers come from the current host's averages, and per-race senate
+// numbers are still computed here from the legacy host's raw polls (trailing
+// mean + rolling-average `trend` for the click-to-expand history charts).
 
 import { WATCHED_RACES } from "../src/config/races.config.js";
 
 const VOTEHUB = "https://api.votehub.com/polls";
+const VOTEHUB_AVERAGES = "https://polling.votehub.com/averages";
 const UA = "2026-election-tracker/1.0 (dashboard)";
 
 // VoteHub honors ?poll_type= server-side, so fetch only the slice we need
@@ -95,25 +102,56 @@ const nameTrend = (trend, leftKey, rightKey) =>
 
 // ---- matchers ----
 const lc = (c) => (c || "").toLowerCase();
-const gbDem = (c) => lc(c) === "dem" || lc(c).includes("democrat");
-const gbRep = (c) => lc(c) === "rep" || lc(c).includes("republican");
-const apAppr = (c) => lc(c).includes("approve") && !lc(c).includes("disapprove");
-const apDis = (c) => lc(c).includes("disapprove");
+
+// ---- official averages (polling.votehub.com) ----
+
+// GET /averages/{key}/values -> { "YYYY-MM-DD": { dem: {average,lower,upper}, ... } }
+async function getAverageValues(key, sinceDays) {
+  const start = new Date(Date.now() - sinceDays * 86400000).toISOString().slice(0, 10);
+  const r = await fetch(`${VOTEHUB_AVERAGES}/${encodeURIComponent(key)}/values?start_date=${start}`, {
+    headers: { "User-Agent": UA, Accept: "application/json" },
+  });
+  if (!r.ok) throw new Error(`votehub averages ${r.status}`);
+  return r.json();
+}
+
+// Date-keyed daily values -> sorted [{ t, <leftKey>, <rightKey> }], downsampled for charts.
+function averageTrend(values, leftKey, rightKey, { maxPoints = 130 } = {}) {
+  let out = Object.entries(values)
+    .map(([date, sides]) => {
+      const side = (k) => {
+        const v = Number(sides?.[k]?.average);
+        return Number.isFinite(v) ? round1(v) : null;
+      };
+      return { t: Math.floor(Date.parse(`${date}T00:00:00Z`) / 1000), [leftKey]: side(leftKey), [rightKey]: side(rightKey) };
+    })
+    .filter((p) => Number.isFinite(p.t) && (p[leftKey] != null || p[rightKey] != null))
+    .sort((a, b) => a.t - b.t);
+  if (out.length > maxPoints) {
+    const step = Math.ceil(out.length / maxPoints);
+    out = out.filter((_, i) => i % step === 0 || i === out.length - 1);
+  }
+  return out;
+}
 
 // ---- public API ----
 export async function getMacroPolls() {
-  const [gb, apAll] = await Promise.all([getPolls("generic-ballot"), getPolls("approval")]);
+  const [gbVals, apVals] = await Promise.all([
+    getAverageValues("generic_ballot_2026", 540),
+    getAverageValues("trump_approval", 540),
+  ]);
 
-  const gbAvg = averageRecent(gb, gbDem, gbRep, { windowDays: 45, minN: 5 });
-  const gbTrend = nameTrend(rollingTrend(gb, gbDem, gbRep, { windowDays: 30 }), "dem", "rep");
+  const gbTrend = averageTrend(gbVals, "dem", "rep");
+  const apTrend = averageTrend(apVals, "approve", "disapprove");
+  const gbLast = gbTrend[gbTrend.length - 1] || {};
+  const apLast = apTrend[apTrend.length - 1] || {};
+  const iso = (t) => (t ? new Date(t * 1000).toISOString() : null);
 
-  const ap = apAll.filter((p) => p.subject === "Donald Trump");
-  const apAvg = averageRecent(ap, apAppr, apDis, { windowDays: 30, minN: 5 });
-  const apTrend = nameTrend(rollingTrend(ap, apAppr, apDis, { windowDays: 21 }), "approve", "disapprove");
-
+  // n (poll count behind the average) isn't part of the averages feed; the macro
+  // cards don't render it, so it's null rather than a second upstream call.
   return {
-    genericBallot: { dem: gbAvg.left, rep: gbAvg.right, n: gbAvg.n, lastUpdated: gbAvg.lastUpdated, trend: gbTrend },
-    approval: { approve: apAvg.left, disapprove: apAvg.right, n: apAvg.n, lastUpdated: apAvg.lastUpdated, trend: apTrend },
+    genericBallot: { dem: gbLast.dem ?? null, rep: gbLast.rep ?? null, n: null, lastUpdated: iso(gbLast.t), trend: gbTrend },
+    approval: { approve: apLast.approve ?? null, disapprove: apLast.disapprove ?? null, n: null, lastUpdated: iso(apLast.t), trend: apTrend },
   };
 }
 
