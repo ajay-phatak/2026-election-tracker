@@ -55,7 +55,7 @@ won't), not the foundation.
   - `api/_polls.js` — VoteHub polling averages/trends.
   - `api/_news.js` — GNews JSON API. Query must stay ~2 terms (GNews ANDs terms; the free
     plan only returns the last 30 days, so longer queries return empty).
-  - `src/config/races.config.js` — `WATCHED_RACES.senate` (9 states, each has `stateCode`,
+  - `src/config/races.config.js` — `WATCHED_RACES.senate` (11 states, each has `stateCode`,
     `polymarketSlug`, `kalshiMarketId`, `pollParties`), `WATCHED_RACES.house` (~37
     districts, Polymarket-only), `CONTROL_MARKETS`.
 - **Local dev:** `vite dev` uses a middleware in `vite.config.js` that loads the OLD Vercel
@@ -63,7 +63,7 @@ won't), not the foundation.
   NO `env`/KV. **Any KV code must treat the binding as possibly-undefined and fall back to
   a live provider call**, or local dev and the Vite middleware break.
 - **Client:** `src/lib/api.js` calls `/api/*` (memoized per session). On load it prefetches
-  only current odds for the 9 senate states; history and news load lazily when a drawer/card
+  only current odds for the 11 senate states; history and news load lazily when a drawer/card
   opens (`src/components/RaceDrawer.jsx`, `MacroMetrics.jsx`). Don't reintroduce eager
   history/news prefetch — it bursts the upstreams.
 
@@ -92,8 +92,8 @@ past that. Store **aggregate** keys instead:
 | `house-races` | getAllHouseRaces() result | |
 | `race-polls` | getAllRacePolls() result | |
 | `races` | `{ [stateCode]: getRace(state) }` for all 9 senate states | warmer loops, paced |
-| `histories` | `{ [stateCode]: getRaceHistory(state) }` for all 9 | warmer loops, paced |
-| `news` | `{ [stateCode]: getRaceNews(state, key) }` for all 9 | warmer loops, paced |
+| `histories` | `{ [stateCode]: getRaceHistory(state) }` for all 11 | warmer loops, paced |
+| `news` | `{ [stateCode]: getRaceNews(state, key) }` for all 11 | warmer loops, paced |
 
 8 keys × refresh frequency. At every-15-min that's ~768 writes/day (under the free quota);
 every-10-min (~1152/day) needs paid KV (≈$0.50/million writes — negligible, fine for an

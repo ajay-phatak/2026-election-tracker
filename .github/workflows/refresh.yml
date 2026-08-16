@@ -6,9 +6,10 @@
 #   - every 15 min  -> ?only=markets  (control/odds/polls/history, mirrored from the
 #                      clean-IP origin; ~23 reliable fetches, well under the 50-
 #                      subrequest cap)
-#   - every 3 hours -> ?only=news     (fetched directly from GNews with Cloudflare's
-#                      NEWS_API_KEY; kept slow so 9 states x 8/day stays under GNews'
-#                      ~100 req/day free quota)
+#   - every 4 hours -> ?only=news     (fetched directly from GNews with Cloudflare's
+#                      NEWS_API_KEY; kept slow so 11 states x 6/day stays under GNews'
+#                      ~100 req/day free quota. The cadence is sized against the
+#                      state count — re-check it whenever states are added.)
 # Manual runs (workflow_dispatch) default to ?only=all (markets + news).
 #
 # Setup (one-time): add a repo secret REFRESH_TOKEN equal to the Pages
@@ -23,8 +24,8 @@ on:
     # Markets: every 15 min. GitHub cron is best-effort and can run several minutes
     # late under load — fine for slow-moving odds (KV's read path live-falls-back).
     - cron: "*/15 * * * *"
-    # News: every 3 hours, offset to :07 so it never lands on a markets tick.
-    - cron: "7 */3 * * *"
+    # News: every 4 hours, offset to :07 so it never lands on a markets tick.
+    - cron: "7 */4 * * *"
   workflow_dispatch:
     inputs:
       only:
@@ -49,7 +50,7 @@ jobs:
       REFRESH_TOKEN: ${{ secrets.REFRESH_TOKEN }}
       # Manual run -> the chosen input; news schedule -> news; markets schedule (or
       # anything else) -> markets.
-      ONLY: ${{ inputs.only || (github.event.schedule == '7 */3 * * *' && 'news' || 'markets') }}
+      ONLY: ${{ inputs.only || (github.event.schedule == '7 */4 * * *' && 'news' || 'markets') }}
     steps:
       - name: Warm KV (${{ env.ONLY }})
         run: |

@@ -9,15 +9,20 @@
 // upkeep point — update it as 2026 fields firm up.
 export const WATCHED_RACES = {
   senate: [
-    { state: "Georgia", stateCode: "GA", category: "must_keep", incumbent: "Jon Ossoff", party: "D", kalshiMarketId: "SENATEGA", polymarketSlug: "georgia-senate-election-winner", pollParties: { dem: ["Ossoff"], rep: ["Collins", "Carter"] }, notes: "" },
-    { state: "Michigan", stateCode: "MI", category: "must_keep", incumbent: "Gary Peters", party: "D", kalshiMarketId: "SENATEMI", polymarketSlug: "michigan-senate-election-winner", pollParties: { dem: ["Stevens", "McMorrow", "El-Sayed"], rep: ["Rogers"] }, notes: "" },
-    { state: "Maine", stateCode: "ME", category: "hard_flip", incumbent: "Susan Collins", party: "R", kalshiMarketId: "SENATEME", polymarketSlug: "maine-senate-election-winner", pollParties: { dem: ["Platner", "Mills"], rep: ["Collins"] }, notes: "" },
-    { state: "North Carolina", stateCode: "NC", category: "easy_flip", incumbent: "Thom Tillis", party: "R", kalshiMarketId: "SENATENC", polymarketSlug: "north-carolina-senate-election-winner", pollParties: { dem: ["Cooper"], rep: ["Whatley", "Tillis", "Thillis", "Lara Trump"] }, notes: "" },
-    { state: "Texas", stateCode: "TX", category: "hard_flip", incumbent: "John Cornyn", party: "R", kalshiMarketId: "SENATETX", polymarketSlug: "texas-senate-election-winner", pollParties: { dem: ["Talarico"], rep: ["Paxton", "Cornyn"] }, notes: "" },
-    { state: "Alaska", stateCode: "AK", category: "easy_flip", incumbent: "Dan Sullivan", party: "R", kalshiMarketId: "SENATEAK", polymarketSlug: "alaska-senate-election-winner", pollParties: { dem: ["Peltola"], rep: ["Sullivan"] }, notes: "" },
-    { state: "Ohio", stateCode: "OH", category: "hard_flip", incumbent: "Jon Husted", party: "R", kalshiMarketId: "SENATEOHS", polymarketSlug: "ohio-senate-election-winner", pollParties: { dem: ["Sherrod Brown"], rep: ["Husted"] }, notes: "" },
-    { state: "Iowa", stateCode: "IA", category: "hard_flip", incumbent: "Joni Ernst", party: "R", kalshiMarketId: "SENATEIA", polymarketSlug: "iowa-senate-election-winner", pollParties: { dem: ["Turek", "Wahls"], rep: ["Hinson"] }, notes: "" },
-    { state: "Florida", stateCode: "FL", category: "dream_flip", incumbent: "Ashley Moody", party: "R", kalshiMarketId: "SENATEFLS", polymarketSlug: "florida-senate-election-winner", pollParties: { dem: ["Vindman", "Nixon"], rep: ["Moody"] }, notes: "" },
+    { state: "Georgia", stateCode: "GA", category: "favored", incumbent: "Jon Ossoff", party: "D", kalshiMarketId: "SENATEGA", polymarketSlug: "georgia-senate-election-winner", pollParties: { dem: ["Ossoff"], rep: ["Collins", "Carter"] }, notes: "" },
+    { state: "Michigan", stateCode: "MI", category: "competitive", incumbent: "Gary Peters", party: "D", kalshiMarketId: "SENATEMI", polymarketSlug: "michigan-senate-election-winner", pollParties: { dem: ["Stevens", "McMorrow", "El-Sayed"], rep: ["Rogers"] }, notes: "" },
+    { state: "Maine", stateCode: "ME", category: "uphill", incumbent: "Susan Collins", party: "R", kalshiMarketId: "SENATEME", polymarketSlug: "maine-senate-election-winner", pollParties: { dem: ["Platner", "Mills"], rep: ["Collins"] }, notes: "" },
+    { state: "North Carolina", stateCode: "NC", category: "favored", incumbent: "Thom Tillis", party: "R", kalshiMarketId: "SENATENC", polymarketSlug: "north-carolina-senate-election-winner", pollParties: { dem: ["Cooper"], rep: ["Whatley", "Tillis", "Thillis", "Lara Trump"] }, notes: "" },
+    { state: "Texas", stateCode: "TX", category: "uphill", incumbent: "John Cornyn", party: "R", kalshiMarketId: "SENATETX", polymarketSlug: "texas-senate-election-winner", pollParties: { dem: ["Talarico"], rep: ["Paxton", "Cornyn"] }, notes: "" },
+    { state: "Alaska", stateCode: "AK", category: "competitive", incumbent: "Dan Sullivan", party: "R", kalshiMarketId: "SENATEAK", polymarketSlug: "alaska-senate-election-winner", pollParties: { dem: ["Peltola"], rep: ["Sullivan"] }, notes: "" },
+    { state: "Ohio", stateCode: "OH", category: "uphill", incumbent: "Jon Husted", party: "R", kalshiMarketId: "SENATEOHS", polymarketSlug: "ohio-senate-election-winner", pollParties: { dem: ["Sherrod Brown"], rep: ["Husted"] }, notes: "" },
+    { state: "Iowa", stateCode: "IA", category: "uphill", incumbent: "Joni Ernst", party: "R", kalshiMarketId: "SENATEIA", polymarketSlug: "iowa-senate-election-winner", pollParties: { dem: ["Turek", "Wahls"], rep: ["Hinson"] }, notes: "" },
+    { state: "Florida", stateCode: "FL", category: "long_shot", incumbent: "Ashley Moody", party: "R", kalshiMarketId: "SENATEFLS", polymarketSlug: "florida-senate-election-winner", pollParties: { dem: ["Vindman", "Nixon"], rep: ["Moody"] }, notes: "" },
+    { state: "Kansas", stateCode: "KS", category: "long_shot", incumbent: "Roger Marshall", party: "R", kalshiMarketId: "SENATEKS", polymarketSlug: "kansas-senate-election-winner", pollParties: { dem: ["Hamilton"], rep: ["Marshall"] }, notes: "" },
+    // South Carolina has no "2026 South Carolina" polls in VoteHub's us-senator feed
+    // yet, so the drawer shows odds + news only; pollParties is pre-seeded from the
+    // Kalshi market's named candidates so numbers appear as soon as VoteHub covers it.
+    { state: "South Carolina", stateCode: "SC", category: "long_shot", incumbent: "Lindsey Graham", party: "R", kalshiMarketId: "SENATESC", polymarketSlug: "south-carolina-senate-election-winner", pollParties: { dem: ["Andrews"], rep: ["Graham"] }, notes: "" },
   ],
   // Curated competitive House districts. Criterion: every district Cook Political
   // Report rates Tossup or Lean (June 3, 2026, via Wikipedia's ratings table; tilt
@@ -84,11 +89,14 @@ export const CONTROL_MARKETS = {
 }
 
 // Dark-blue -> light-blue gradient across the difficulty spectrum (easier to scan).
+// Tiers are named by how likely a Democratic win is, NOT by hold-vs-flip: the old
+// "Must Keep"/"Easy Flip" split implied the held seats were the safest ones, which
+// the odds don't bear out (a held seat can be shakier than a favorable pickup).
 export const CATEGORIES = {
-  must_keep:  { label: "Must Keep",  color: "#1e3a8a" },
-  easy_flip:  { label: "Easy Flip",  color: "#2563eb" },
-  hard_flip:  { label: "Hard Flip",  color: "#60a5fa" },
-  dream_flip: { label: "Dream Flip", color: "#bfdbfe" },
+  favored:     { label: "Favored",     color: "#1e3a8a" },
+  competitive: { label: "Competitive", color: "#2563eb" },
+  uphill:      { label: "Uphill",      color: "#60a5fa" },
+  long_shot:   { label: "Long Shot",   color: "#bfdbfe" },
 }
 
 // House race ratings (blue -> grey -> red). Used for the watchlist badges and the

@@ -129,7 +129,7 @@ export default function USMap({ onSelectRace }) {
 
       <div className="mt-2.5 flex justify-center">
         <Takeaway>
-          Democrats need to win <b>6 of these 9 states</b> to take control of the Senate.
+          Democrats need to win <b>6 of these 11 states</b> to take control of the Senate.
         </Takeaway>
       </div>
       <p className="mt-1.5 text-center text-[10px] text-ops-muted/60">

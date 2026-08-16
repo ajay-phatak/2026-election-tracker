@@ -15,10 +15,13 @@
 // IP-rate-limited (that's why the app moved off the IP-blocked Google RSS), but it
 // has a hard ~100 requests/day free quota. So news is fetched DIRECTLY here with
 // Cloudflare's own NEWS_API_KEY (no dependency on the origin having a news key) and
-// warmed on a SEPARATE, infrequent schedule (the cron's `news` group, ~every 3h =
-// 9 states x 8 = ~72 calls/day, under quota). Warming 9 states every 15 min would
-// have blown the quota. A guard keeps the last-good news in KV if a whole run comes
-// back empty (transient GNews failure), so it never wipes good data.
+// warmed on a SEPARATE, infrequent schedule (the cron's `news` group, ~every 4h =
+// 11 states x 6 = ~66 calls/day, under quota). Warming every 15 min would have blown
+// the quota. NOTE the cadence is sized against the state count: at 3h (8 runs/day)
+// 11 states would be ~88/day with no room for the 429 retries below, which is why
+// adding Kansas + South Carolina moved the news cron from 3h to 4h. A guard keeps
+// the last-good news in KV if a whole run comes back empty (transient GNews
+// failure), so it never wipes good data.
 //
 // Pages routes this static file ahead of the [[route]] catch-all, so /api/refresh
 // lands here.
@@ -175,7 +178,7 @@ async function runGroup(group, origin, newsKey, kv, summary) {
     // News is fetched DIRECTLY from GNews with Cloudflare's own key (not via the
     // origin), and GNews 429s rapid bursts, so walk the states SEQUENTIALLY with a
     // pause between each so every call lands (vs. only the first one). This runs on
-    // its own slow ~3h schedule so the ~9 calls/run stay under GNews' daily quota.
+    // its own slow ~4h schedule so the ~11 calls/run stay under GNews' daily quota.
     const news = {};
     for (let i = 0; i < SENATE_STATES.length; i++) {
       const st = SENATE_STATES[i];
@@ -191,7 +194,7 @@ async function runGroup(group, origin, newsKey, kv, summary) {
       await writeKey(kv, summary, "news", async () => news);
     } else {
       // Whole run came back empty -> almost certainly a transient GNews failure or
-      // a missing key, not 9 genuinely newsless races. Keep the last-good KV value.
+      // a missing key, not 11 genuinely newsless races. Keep the last-good KV value.
       summary.failures.push("news: all states empty — kept previous KV value (verify NEWS_API_KEY)");
     }
   }
