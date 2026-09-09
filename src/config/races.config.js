@@ -25,8 +25,9 @@ export const WATCHED_RACES = {
     { state: "South Carolina", stateCode: "SC", category: "long_shot", incumbent: "Lindsey Graham", party: "R", kalshiMarketId: "SENATESC", polymarketSlug: "south-carolina-senate-election-winner", pollParties: { dem: ["Andrews"], rep: ["Graham"] }, notes: "" },
   ],
   // Curated competitive House districts. Criterion: every district Cook Political
-  // Report rates Tossup or Lean (June 3, 2026, via Wikipedia's ratings table; tilt
-  // folded into lean), plus ME-2 (Likely R — the cycle's biggest expected flip).
+  // Report rates Tossup or Lean, plus ME-2 (Likely R — the cycle's biggest expected
+  // flip) and MI-8, which Cook moved up to Likely D on Aug 25, 2026 but which keeps
+  // its slot here because the Polymarket series is already running on it.
   // `rating` is Cook's. `incumbent: "Open seat"` = the sitting member isn't running
   // (per the DCCC/NRCC target lists); `party` is the seat's current/last holder.
   // `polymarketSlug` is set where a per-district market exists — note Polymarket
@@ -42,15 +43,15 @@ export const WATCHED_RACES = {
     { code: "CA-45", state: "California", district: "CA-45", incumbent: "Derek Tran", party: "D", rating: "leanD", polymarketSlug: "ca-45-house-election-winner" },
     { code: "CA-48", state: "California", district: "CA-48", incumbent: "Open seat", party: "R", rating: "leanD", polymarketSlug: "ca-48-house-election-winner" },
     { code: "CO-8", state: "Colorado", district: "CO-8", incumbent: "Gabe Evans", party: "R", rating: "tossup", polymarketSlug: "co-08-house-election-winner" },
-    { code: "FL-14", state: "Florida", district: "FL-14", incumbent: "Kathy Castor", party: "D", rating: "leanR", polymarketSlug: "fl-14-house-election-winner" },
+    { code: "FL-14", state: "Florida", district: "FL-14", incumbent: "Kathy Castor", party: "D", rating: "tossup", polymarketSlug: "fl-14-house-election-winner" },
     { code: "FL-22", state: "Florida", district: "FL-22", incumbent: "Open seat", party: "D", rating: "leanR", polymarketSlug: "fl-22-house-election-winner" },
     { code: "FL-25", state: "Florida", district: "FL-25", incumbent: "Jared Moskowitz", party: "D", rating: "tossup", polymarketSlug: "fl-25-house-election-winner" },
     { code: "IA-1", state: "Iowa", district: "IA-1", incumbent: "Mariannette Miller-Meeks", party: "R", rating: "tossup", polymarketSlug: "ia-01-house-election-winner" },
     { code: "IA-3", state: "Iowa", district: "IA-3", incumbent: "Zach Nunn", party: "R", rating: "tossup", polymarketSlug: "ia-03-house-election-winner" },
     { code: "ME-2", state: "Maine", district: "ME-2", incumbent: "Open seat", party: "D", rating: "likelyR" },
     { code: "MI-7", state: "Michigan", district: "MI-7", incumbent: "Tom Barrett", party: "R", rating: "tossup", polymarketSlug: "mi-07-house-election-winner" },
-    { code: "MI-8", state: "Michigan", district: "MI-8", incumbent: "Kristen McDonald Rivet", party: "D", rating: "leanD", polymarketSlug: "mi-08-house-election-winner" },
-    { code: "MI-10", state: "Michigan", district: "MI-10", incumbent: "Open seat", party: "R", rating: "leanR", polymarketSlug: "mi-10-house-election-winner" },
+    { code: "MI-8", state: "Michigan", district: "MI-8", incumbent: "Kristen McDonald Rivet", party: "D", rating: "likelyD", polymarketSlug: "mi-08-house-election-winner" },
+    { code: "MI-10", state: "Michigan", district: "MI-10", incumbent: "Open seat", party: "R", rating: "tossup", polymarketSlug: "mi-10-house-election-winner" },
     { code: "NC-1", state: "North Carolina", district: "NC-1", incumbent: "Don Davis", party: "D", rating: "leanR", polymarketSlug: "nc-01-house-election-winner" },
     { code: "NE-2", state: "Nebraska", district: "NE-2", incumbent: "Open seat", party: "R", rating: "leanD", polymarketSlug: "ne-02-house-election-winner" },
     { code: "NJ-7", state: "New Jersey", district: "NJ-7", incumbent: "Tom Kean Jr.", party: "R", rating: "tossup", polymarketSlug: "nj-07-house-election-winner" },
@@ -115,17 +116,17 @@ export const RATINGS = {
 // ratings rollup. Ratings have no free API, so update this periodically (the one
 // manual upkeep point, like pollParties). `ratings` counts must sum to `total`.
 //
-// `current` is the sworn 119th Congress as of June 2026 — vacancies: CA-1 (R, died;
-// special won by Gallagher (R), not yet sworn), CA-14 (D), TX-23 (R), FL-20 (D),
-// GA-13 (D). `ind` is CA-3 (left the GOP). `ratings` is Cook Political Report
-// June 3, 2026 (via Wikipedia's competitive-seat table): listed seats use Cook's
-// rating, every unlisted seat counts as safe for its current holder's party
-// (CA-3's unrated seat counted safe R). 179+11+12+18+5+17+193 = 435.
+// `current` is the sworn 119th Congress as of Sept 9, 2026 — vacancies are FL-20 (D)
+// and TX-23 (R). `ind` is CA-3 (left the GOP). `ratings` starts from Cook Political
+// Report's June 3, 2026 table (listed seats use Cook's rating; every unlisted seat
+// counts as safe for its current holder's party) and applies Cook's Aug 25, 2026
+// shifts: FL-14 and MI-10 Lean R -> Toss Up, MI-8 Lean D -> Likely D.
+// 179+12+11+20+3+17+193 = 435.
 export const HOUSE_OUTLOOK = {
   majority: 218,
   total: 435,
-  current: { dem: 212, rep: 217, ind: 1, vacant: 5 },
-  ratings: { safeD: 179, likelyD: 11, leanD: 12, tossup: 18, leanR: 5, likelyR: 17, safeR: 193 },
-  asOf: "June 3, 2026",
+  current: { dem: 214, rep: 218, ind: 1, vacant: 2 },
+  ratings: { safeD: 179, likelyD: 12, leanD: 11, tossup: 20, leanR: 3, likelyR: 17, safeR: 193 },
+  asOf: "August 25, 2026",
   source: "Cook Political Report race ratings",
 }
