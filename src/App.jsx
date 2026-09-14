@@ -12,6 +12,12 @@ import { AD_SLOTS } from "./config/ads.config";
 export default function App() {
   const [selectedCode, setSelectedCode] = useState(null);
   const [ready, setReady] = useState(false);
+  const [stale, setStale] = useState(false);
+  useEffect(() => {
+    const warn = () => setStale(true);
+    window.addEventListener('election-tracker-stale', warn);
+    return () => window.removeEventListener('election-tracker-stale', warn);
+  }, []);
 
   const handleReady = useCallback(() => setReady(true), []);
 
@@ -28,23 +34,28 @@ export default function App() {
         <div>
           <div className="flex items-center gap-2">
             <span
-              title="Live · online"
-              className="h-2.5 w-2.5 animate-pulse rounded-full bg-[#22c55e] shadow-[0_0_8px_#22c55e]"
+              title="See source retrieval status below"
+              className="h-2.5 w-2.5 rounded-full bg-accent"
             />
             <h1 className="text-lg font-extrabold tracking-tight text-ops-text sm:text-xl">
               2026 Midterm Elections Tracker
             </h1>
           </div>
           <p className="mt-0.5 text-xs text-ops-muted">
-            Live battleground tracker · markets, polls &amp; approval at a glance
+            Battleground tracker · market probabilities, polls &amp; approval at a glance
           </p>
         </div>
         <div className="text-[10px] uppercase tracking-widest text-ops-muted/70">
-          Live data · Polymarket · Kalshi · VoteHub
+          Polymarket · Kalshi · VoteHub
         </div>
       </header>
 
       {/* Macro metrics */}
+      <div role="status" className="rounded-xl border border-ops-border p-3 text-xs text-ops-muted">
+        {stale ? 'Refresh failed: showing last-good browser data. Original dates are retained; values may be stale. ' : 'Fetched on page load; not a streaming feed. Cached responses may lag. '}
+        <button className="font-semibold text-accent underline" onClick={() => window.location.reload()}>Refresh / retry all sources</button>
+        <span> · Last-good data is stored in this browser. Clear site storage to remove it.</span>
+      </div>
       <MacroMetrics onReady={handleReady} />
 
       {/* Map centerpiece */}

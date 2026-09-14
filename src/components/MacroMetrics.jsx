@@ -5,6 +5,8 @@ import OverlapBar, { overlapInfo } from "./OverlapBar";
 import SourceTag from "./SourceTag";
 import TrendChart from "./TrendChart";
 import VolumeStat from "./VolumeStat";
+import WhatChanged from "./WhatChanged";
+import { freshness } from "../lib/quality";
 
 const DEM = "#2563eb";
 const REP = "#dc2626";
@@ -56,7 +58,7 @@ function LeadBadge({ leftLabel, rightLabel, leftValue, rightValue, leftColor, ri
       className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
       style={{ color, backgroundColor: `${color}1a` }}
     >
-      {leftLeads ? leftLabel : rightLabel} +{Math.round(Math.abs(leftValue - rightValue) * 10) / 10}
+      {leftLeads ? leftLabel : rightLabel} +{Math.round(Math.abs(leftValue - rightValue) * 10) / 10} pp
     </span>
   );
 }
@@ -161,6 +163,7 @@ function PollCard({
   expanded,
   onToggle,
 }) {
+  const [now] = useState(() => Date.now());
   const ready = status === "ok" && leftValue != null && rightValue != null;
   return (
     <CardShell
@@ -219,8 +222,8 @@ function PollCard({
 
       <div className="mt-auto flex items-center justify-between gap-2 pt-1">
         <SourceTag kind="polls" />
-        <p className="whitespace-nowrap text-[10px] uppercase tracking-wide text-ops-muted/70">
-          Updated {formatUpdated(lastUpdated)}
+        <p className="text-right text-[10px] uppercase tracking-wide text-ops-muted/70">
+          Data as of {formatUpdated(lastUpdated)} · {freshness(lastUpdated, now, 7 * 86400000)}
         </p>
       </div>
     </CardShell>
@@ -252,14 +255,7 @@ function MarketControlCard({ title, status, data, isExpanded, onToggle, onSource
       onClick={() => hasData && onToggle(current.id)}
       badge={
         hasData ? (
-          <LeadBadge
-            leftLabel="DEM"
-            rightLabel="GOP"
-            leftValue={current.demYes}
-            rightValue={current.repYes}
-            leftColor={DEM}
-            rightColor={REP}
-          />
+          <span className="text-[10px] text-amber-400">Market-implied probability</span>
         ) : null
       }
     >
@@ -304,10 +300,11 @@ function MarketControlCard({ title, status, data, isExpanded, onToggle, onSource
           </>
         ) : (
           <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-ops-border bg-ops-panel-2/40 px-3 py-4 text-center text-xs text-ops-muted">
-            No {current?.label || "source"} market yet
+            {current?.label || "Source"} unavailable — not evidence of no market
           </div>
         ))}
 
+      <p className="text-[10px] text-ops-muted">{current?.stale ? 'Stale · last good value retained' : freshness(current?.retrievedAt || current?.lastUpdated)} retrieval · {current?.observationAt ? `Candle as of ${formatUpdated(current.observationAt)}` : 'Source change time unknown'}. Prices are not vote shares.</p>
       {/* Provider switcher — the one market-only control, on its own row so the
           footer below stays identical across all four cards. */}
       {status === "ok" && multi && (
@@ -322,8 +319,8 @@ function MarketControlCard({ title, status, data, isExpanded, onToggle, onSource
 
       <div className="mt-auto flex items-center justify-between gap-2 pt-1">
         <SourceTag kind="market" />
-        <p className="whitespace-nowrap text-[10px] uppercase tracking-wide text-ops-muted/70">
-          Updated {formatUpdated(current?.lastUpdated)}
+        <p className="text-right text-[10px] uppercase tracking-wide text-ops-muted/70">
+          Retrieved {formatUpdated(current?.retrievedAt || current?.lastUpdated)}
         </p>
       </div>
     </CardShell>
@@ -399,7 +396,7 @@ export default function MacroMetrics({ onReady }) {
   useEffect(() => {
     if (expanded?.type !== "control" || controlHistory) return;
     let alive = true;
-    setControlHistoryStatus("loading");
+
     fetchControlHistory()
       .then((d) => alive && (setControlHistory(d), setControlHistoryStatus("ok")))
       .catch(() => alive && setControlHistoryStatus("error"));
@@ -502,6 +499,7 @@ export default function MacroMetrics({ onReady }) {
       </div>
 
       {panel && <HistoryPanel {...panel} />}
+      <WhatChanged control={control} />
     </div>
   );
 }

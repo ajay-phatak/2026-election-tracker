@@ -10,6 +10,8 @@ const PURPLE = "#9333ea";
 const GREY = "#3a4150";
 
 // Describes the middle band, or null when the values sum to exactly 100.
+// Pure helper intentionally colocated with its bar; safe outside Fast Refresh.
+// eslint-disable-next-line react-refresh/only-export-components
 export function overlapInfo(demYes, repYes) {
   if (demYes == null || repYes == null) return null;
   const sum = demYes + repYes;
