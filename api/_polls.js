@@ -40,8 +40,9 @@ function pollSides(poll, isLeft, isRight) {
   const r = [];
   for (const a of poll.answers || []) {
     const c = a.choice || "";
+    if ((typeof a.pct !== 'number' && typeof a.pct !== 'string') || (typeof a.pct === 'string' && !a.pct.trim())) continue;
     const v = Number(a.pct);
-    if (!Number.isFinite(v)) continue;
+    if (!Number.isFinite(v) || v < 0 || v > 100) continue;
     if (isLeft(c)) l.push(v);
     else if (isRight(c)) r.push(v);
   }
@@ -110,6 +111,7 @@ async function getAverageValues(key, sinceDays) {
   const start = new Date(Date.now() - sinceDays * 86400000).toISOString().slice(0, 10);
   const r = await fetch(`${VOTEHUB_AVERAGES}/${encodeURIComponent(key)}/values?start_date=${start}`, {
     headers: { "User-Agent": UA, Accept: "application/json" },
+
   });
   if (!r.ok) throw new Error(`votehub averages ${r.status}`);
   return r.json();
@@ -120,8 +122,10 @@ function averageTrend(values, leftKey, rightKey, { maxPoints = 130 } = {}) {
   let out = Object.entries(values)
     .map(([date, sides]) => {
       const side = (k) => {
-        const v = Number(sides?.[k]?.average);
-        return Number.isFinite(v) ? round1(v) : null;
+        const raw = sides?.[k]?.average;
+        if ((typeof raw !== 'number' && typeof raw !== 'string') || (typeof raw === 'string' && !raw.trim())) return null;
+        const v = Number(raw);
+        return Number.isFinite(v) && v >= 0 && v <= 100 ? round1(v) : null;
       };
       return { t: Math.floor(Date.parse(`${date}T00:00:00Z`) / 1000), [leftKey]: side(leftKey), [rightKey]: side(rightKey) };
     })

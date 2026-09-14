@@ -79,7 +79,7 @@ export async function getRaceNews(code, apiKey, { strict = false } = {}) {
   // No key configured -> degrade gracefully (local dev, or before the Pages env var is set).
   if (!apiKey) {
     if (strict) throw new Error("no NEWS_API_KEY");
-    return empty;
+    return { ...empty, status: "unavailable", reason: "News disabled: NEWS_API_KEY not configured" };
   }
 
   try {
@@ -91,7 +91,7 @@ export async function getRaceNews(code, apiKey, { strict = false } = {}) {
     const r = await fetch(url, { headers: { Accept: "application/json" } });
     if (!r.ok) {
       if (strict) throw new Error(`gnews ${r.status}`);
-      return empty;
+      return { ...empty, status: "unavailable", reason: "News provider request failed" };
     }
     const data = await r.json();
     const articles = normalize(data.articles, rel);
@@ -102,6 +102,6 @@ export async function getRaceNews(code, apiKey, { strict = false } = {}) {
     };
   } catch (e) {
     if (strict) throw e;
-    return empty;
+    return { ...empty, status: "unavailable", reason: "News provider request failed" };
   }
 }

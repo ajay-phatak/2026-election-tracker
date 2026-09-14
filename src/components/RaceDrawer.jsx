@@ -21,7 +21,7 @@ const POLL_SERIES = [
 
 const DEM = "#2563eb";
 const REP = "#dc2626";
-const EMPTY_MSG = "No data yet — check back closer to November";
+const EMPTY_MSG = "Data unavailable — source may be missing or request failed. Retry from the dashboard.";
 
 function PartyBadge({ party }) {
   const isDem = party === "D";
@@ -125,6 +125,7 @@ function ProviderOdds({ source, expanded, onToggle }) {
               <span className="mt-1 text-[11px] font-medium text-ops-muted">Rep</span>
             </div>
           </div>
+          <p className="mb-2 text-[10px] text-ops-muted">Market-implied probability · {source.stale ? 'stale last-good value · ' : ''}Retrieved {formatUpdated(source.retrievedAt || source.lastUpdated)}. {source.observationAt ? `Candle as of ${formatUpdated(source.observationAt)}` : 'Source change time unknown'}.</p>
           <OverlapBar demYes={source.demYes} repYes={source.repYes} />
           <div className="mt-2 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent">
             <svg
@@ -140,7 +141,7 @@ function ProviderOdds({ source, expanded, onToggle }) {
           </div>
         </>
       ) : (
-        <div className="py-4 text-center text-xs text-ops-muted">No data yet</div>
+        <div className="py-4 text-center text-xs text-ops-muted">Market unavailable</div>
       )}
     </Tag>
   );
@@ -150,9 +151,7 @@ export default function RaceDrawer({ stateCode, onClose }) {
   const open = Boolean(stateCode);
   // Keep the last selected code so content doesn't blank out during the slide-out.
   const [activeCode, setActiveCode] = useState(stateCode);
-  useEffect(() => {
-    if (stateCode) setActiveCode(stateCode);
-  }, [stateCode]);
+  if (stateCode && stateCode !== activeCode) setActiveCode(stateCode);
 
   // Close on Escape.
   useEffect(() => {
@@ -176,6 +175,8 @@ export default function RaceDrawer({ stateCode, onClose }) {
   useEffect(() => {
     if (!activeCode) return;
     let alive = true;
+    // Reset all race-specific panels together to avoid showing the previous race.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setOddsStatus("loading");
     setOdds(null);
     setHistoryStatus("loading");
@@ -339,7 +340,7 @@ export default function RaceDrawer({ stateCode, onClose }) {
 
                     {oddsUpdated && (
                       <p className="mt-2 text-[10px] uppercase tracking-wide text-ops-muted/70">
-                        Updated {formatUpdated(oddsUpdated)}
+                        Retrieved {formatUpdated(oddsUpdated)}
                       </p>
                     )}
                   </>
@@ -383,7 +384,7 @@ export default function RaceDrawer({ stateCode, onClose }) {
                       </div>
                     )}
                     <p className="mt-2 text-[10px] uppercase tracking-wide text-ops-muted/70">
-                      {polls.n} poll{polls.n === 1 ? "" : "s"} · updated {formatUpdated(polls.lastUpdated)}
+                      {polls.n} poll{polls.n === 1 ? "" : "s"} · latest poll ends {formatUpdated(polls.lastUpdated)}
                     </p>
                   </>
                 ) : (
@@ -411,11 +412,11 @@ export default function RaceDrawer({ stateCode, onClose }) {
                   <>
                     <NewsList articles={news.articles} />
                     <p className="mt-2 text-[10px] uppercase tracking-wide text-ops-muted/70">
-                      via Google News
+                      via GNews
                     </p>
                   </>
                 ) : (
-                  <EmptyNote />
+                  <p className="text-xs text-ops-muted">{news?.reason || 'No matching articles returned by GNews.'}</p>
                 ))}
             </Section>
 
