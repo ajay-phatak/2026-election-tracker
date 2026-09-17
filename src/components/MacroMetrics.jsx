@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { formatUpdated } from "../lib/format";
-import { fetchControl, fetchControlHistory, fetchPolls, sourceHasData } from "../lib/api";
+import {
+  fetchControl,
+  fetchControlHistory,
+  fetchPolls,
+  prefetchControlHistoryRanges,
+  sourceHasData,
+} from "../lib/api";
 import OverlapBar, { overlapInfo } from "./OverlapBar";
 import RangeSelector, { POLL_RANGES, MARKET_RANGES, sliceRange } from "./RangeSelector";
 import SourceTag from "./SourceTag";
@@ -430,10 +436,16 @@ export default function MacroMetrics({ onReady }) {
     let alive = true;
     setControlHistoryStatus("loading");
     fetchControlHistory(range)
-      .then(
-        (d) =>
-          alive && (setControlHistory((cur) => ({ ...cur, [range]: d })), setControlHistoryStatus("ok"))
-      )
+      .then((d) => {
+        if (!alive) return;
+        setControlHistory((cur) => ({ ...cur, [range]: d }));
+        setControlHistoryStatus("ok");
+        // The range the user actually asked for just landed — quietly warm the
+        // other four in the background so the range selector feels instant.
+        // Only reachable once a control card is expanded (the guard above this
+        // effect), never from page load.
+        prefetchControlHistoryRanges(range);
+      })
       .catch(() => alive && setControlHistoryStatus("error"));
     return () => {
       alive = false;

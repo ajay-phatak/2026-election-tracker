@@ -6,6 +6,7 @@ import {
   fetchRaceHistory,
   fetchRacePolls,
   fetchRaceNews,
+  prefetchRaceHistoryRanges,
   sourceHasData,
 } from "../lib/api";
 import OverlapBar, { overlapInfo } from "./OverlapBar";
@@ -224,6 +225,26 @@ export default function RaceDrawer({ stateCode, onClose }) {
       alive = false;
     };
   }, [activeCode, marketRange]);
+
+  // Quietly warm the other four provider-history ranges once the user has
+  // actually expanded a chart (expandedSource set — that's when the range
+  // selector becomes visible) AND the range they're looking at has loaded.
+  // Deliberately a separate effect from the one above: that effect fetches
+  // history on every drawer open regardless of expandedSource, and firing a
+  // 4-request sweep before the user has asked to see any history at all would
+  // defeat the point of gating this on expand. The `alive` flag is threaded
+  // into the sweep as `shouldContinue` so that clicking through several states
+  // with a chart expanded can't leave a previous state's sweep still issuing
+  // requests after the drawer has moved on — cleanup flips it false and the
+  // sweep stops before its next request.
+  useEffect(() => {
+    if (!expandedSource || historyStatus !== "ok") return;
+    let alive = true;
+    prefetchRaceHistoryRanges(activeCode, marketRange, () => alive);
+    return () => {
+      alive = false;
+    };
+  }, [expandedSource, historyStatus, activeCode, marketRange]);
 
   const race = activeCode ? getRaceByCode(activeCode) : null;
   // Senate races carry a `category`; House districts carry a `rating`.
