@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { formatUpdated } from "../lib/format";
 import { fetchControl, fetchControlHistory, fetchPolls, sourceHasData } from "../lib/api";
 import OverlapBar, { overlapInfo } from "./OverlapBar";
+import RangeSelector, { POLL_RANGES, MARKET_RANGES, sliceRange } from "./RangeSelector";
 import SourceTag from "./SourceTag";
 import TrendChart from "./TrendChart";
 import VolumeStat from "./VolumeStat";
@@ -343,12 +344,33 @@ const APPROVAL_SERIES = [
 
 // Full-width history panel rendered below the card grid (so expanding doesn't
 // distort the 4-card row). Shared by the poll cards and the control cards.
-function HistoryPanel({ title, tag, status, hasData, data, series, volume, volumeKey }) {
+// The range selector only applies to poll history, so it's opt-in: it renders
+// only when the caller supplies `range`/`onRangeChange` (control panels don't).
+function HistoryPanel({
+  title,
+  tag,
+  status,
+  hasData,
+  data,
+  series,
+  volume,
+  volumeKey,
+  range,
+  onRangeChange,
+  rangeData,
+  ranges = POLL_RANGES,
+}) {
+  const rangeable = range != null && onRangeChange != null;
   return (
     <div className="rounded-xl border border-ops-border bg-ops-panel/60 p-4 sm:p-5">
-      <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-ops-muted">
-        {title}
-        {tag && <SourceTag kind={tag} />}
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-ops-muted">
+          {title}
+          {tag && <SourceTag kind={tag} />}
+        </span>
+        {rangeable && (
+          <RangeSelector value={range} onChange={onRangeChange} data={rangeData} ranges={ranges} />
+        )}
       </div>
       {status === "loading" && <div className="h-56 animate-pulse rounded bg-ops-panel-2/60" />}
       {status === "error" && (
@@ -370,7 +392,9 @@ function HistoryPanel({ title, tag, status, hasData, data, series, volume, volum
 export default function MacroMetrics({ onReady }) {
   const [control, setControl] = useState(null);
   const [status, setStatus] = useState("loading");
-  const [controlHistory, setControlHistory] = useState(null);
+  // Keyed by range id ("all"/"90d"/...) so switching the control panel's range
+  // selector doesn't discard an already-fetched window — see the effect below.
+  const [controlHistory, setControlHistory] = useState({});
   const [controlHistoryStatus, setControlHistoryStatus] = useState("loading");
   const [pollData, setPollData] = useState(null);
   const [pollStatus, setPollStatus] = useState("loading");
@@ -395,13 +419,21 @@ export default function MacroMetrics({ onReady }) {
 
   // Control history (heavy Kalshi candle pull) is only shown when a control card
   // is expanded, so fetch it lazily on first expand rather than eagerly on load —
-  // eager fetching added to the Kalshi rate-limit burst on Cloudflare.
+  // eager fetching added to the Kalshi rate-limit burst on Cloudflare. The guard
+  // is per-range (not just "have we ever fetched") so switching the range
+  // selector — which changes `expanded.range` — actually triggers a refetch
+  // instead of silently reusing whatever range loaded first.
   useEffect(() => {
-    if (expanded?.type !== "control" || controlHistory) return;
+    if (expanded?.type !== "control") return;
+    const range = expanded.range || "all";
+    if (controlHistory[range]) return;
     let alive = true;
     setControlHistoryStatus("loading");
-    fetchControlHistory()
-      .then((d) => alive && (setControlHistory(d), setControlHistoryStatus("ok")))
+    fetchControlHistory(range)
+      .then(
+        (d) =>
+          alive && (setControlHistory((cur) => ({ ...cur, [range]: d })), setControlHistoryStatus("ok"))
+      )
       .catch(() => alive && setControlHistoryStatus("error"));
     return () => {
       alive = false;
@@ -411,16 +443,31 @@ export default function MacroMetrics({ onReady }) {
   const gb = pollData?.genericBallot;
   const ap = pollData?.approval;
 
+  // Range lives on the expanded descriptor itself (rather than separate state)
+  // so opening a *different* poll card always starts a fresh { ..., range: "all" }
+  // object — no extra useEffect needed to reset a stale 30D/90D window when the
+  // user switches from Generic Ballot to Trump Approval.
   const togglePoll = (id) =>
-    setExpanded((cur) => (cur?.type === "poll" && cur.id === id ? null : { type: "poll", id }));
+    setExpanded((cur) =>
+      cur?.type === "poll" && cur.id === id ? null : { type: "poll", id, range: "all" }
+    );
+  const setPollRange = (range) =>
+    setExpanded((cur) => (cur?.type === "poll" ? { ...cur, range } : cur));
   const toggleControl = (chamber, sourceId) =>
     setExpanded((cur) =>
-      cur?.type === "control" && cur.chamber === chamber ? null : { type: "control", chamber, sourceId }
+      cur?.type === "control" && cur.chamber === chamber
+        ? null
+        : { type: "control", chamber, sourceId, range: "all" }
     );
   const setControlSource = (chamber, sourceId) =>
     setExpanded((cur) =>
       cur?.type === "control" && cur.chamber === chamber ? { ...cur, sourceId } : cur
     );
+  // Switching Polymarket<->Kalshi (setControlSource above) spreads `...cur`, so
+  // it preserves whatever range is chosen — only a range-selector click or a
+  // fresh chamber open touches `range`.
+  const setControlRange = (range) =>
+    setExpanded((cur) => (cur?.type === "control" ? { ...cur, range } : cur));
   const ctlExpanded = (chamber) => expanded?.type === "control" && expanded.chamber === chamber;
 
   // Resolve the active expansion into a HistoryPanel descriptor.
@@ -428,27 +475,43 @@ export default function MacroMetrics({ onReady }) {
   if (expanded?.type === "poll") {
     const isGB = expanded.id === "genericBallot";
     const d = isGB ? gb : ap;
+    const range = expanded.range || "all";
+    const days = POLL_RANGES.find((r) => r.id === range)?.days ?? null;
     panel = {
       title: `${isGB ? "Generic Ballot" : "Trump Approval"} · polling average over time`,
       tag: "polls",
       status: "ok",
+      // Tested against the FULL trend, not the range-sliced one: the range
+      // selector already disables windows that are too short, so the panel
+      // itself should stay open as long as there's any history at all.
       hasData: (d?.trend?.length || 0) > 1,
-      data: d?.trend,
+      data: sliceRange(d?.trend, days),
       series: isGB ? GENERIC_SERIES : APPROVAL_SERIES,
+      range,
+      onRangeChange: setPollRange,
+      rangeData: d?.trend,
     };
   } else if (expanded?.type === "control") {
-    const src = controlHistory?.[expanded.chamber]?.sources?.find((s) => s.id === expanded.sourceId);
+    const range = expanded.range || "all";
+    const src = controlHistory[range]?.[expanded.chamber]?.sources?.find(
+      (s) => s.id === expanded.sourceId
+    );
     const isKalshi = expanded.sourceId === "kalshi";
     panel = {
       title: `${expanded.chamber === "senate" ? "Senate" : "House"} Control · ${src?.label || ""} · win probability over time`,
       tag: "market",
       status: controlHistoryStatus,
       hasData: Boolean(src?.hasData),
+      // No client-side slicing here (unlike the poll branch's sliceRange) —
+      // the server already returns exactly the requested window.
       data: src?.points,
       series: GENERIC_SERIES,
       // Kalshi candles carry per-day volume -> bars; Polymarket only aggregate -> stat.
       volumeKey: isKalshi ? "volume" : undefined,
       volume: isKalshi ? undefined : src?.volume,
+      range,
+      onRangeChange: setControlRange,
+      ranges: MARKET_RANGES,
     };
   }
 

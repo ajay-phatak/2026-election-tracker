@@ -28,8 +28,19 @@ function useElementWidth() {
   return [ref, width];
 }
 
-const fmtTs = (t) =>
+const fmtDate = (t) =>
   new Date(t * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+const fmtTime = (t) =>
+  new Date(t * 1000).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+
+// Median of a sorted array of gaps (seconds). Odd/even-safe; Infinity on empty
+// input so a 0/1-point series never looks "fine"-grained.
+const median = (sorted) => {
+  const n = sorted.length;
+  if (!n) return Infinity;
+  const mid = Math.floor(n / 2);
+  return n % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+};
 
 const compactNum = (n) => {
   if (n == null) return "";
@@ -45,7 +56,10 @@ const AUTO_DOMAIN = [
   (max) => Math.min(100, Math.ceil((max + 3) / 5) * 5),
 ];
 
-function TrendTooltip({ active, payload, label, series, volumeKey }) {
+// `fine` (sub-daily point spacing, see TrendChart below) adds a time-of-day
+// alongside the date — otherwise a hovered 24H/7D point only shows its day,
+// indistinguishable from every other point hovered that same day.
+function TrendTooltip({ active, payload, label, series, volumeKey, fine }) {
   if (!active || !payload?.length) return null;
   const vol = volumeKey ? payload.find((p) => p.dataKey === volumeKey) : null;
   return (
@@ -56,6 +70,7 @@ function TrendTooltip({ active, payload, label, series, volumeKey }) {
           day: "numeric",
           year: "numeric",
         })}
+        {fine && ` · ${fmtTime(label)}`}
       </div>
       {payload
         .filter((p) => p.dataKey !== volumeKey)
@@ -79,6 +94,25 @@ function TrendTooltip({ active, payload, label, series, volumeKey }) {
 // bars on a right-hand axis. Used by odds history, macro poll history, and drawer polling.
 export default function TrendChart({ data, series, volumeKey, height = 224, domain = AUTO_DOMAIN }) {
   const [ref, width] = useElementWidth();
+
+  // Derived from `data` itself (no new required prop, so every existing
+  // caller — daily poll/market history — keeps working unchanged). Only the
+  // sub-daily market windows (24H, and sometimes 7D) trip these.
+  //   fine: median gap between consecutive points < 1 day -> tooltip adds a
+  //     time-of-day, since same-day points would otherwise show identical dates.
+  //   intraday: whole series spans <= 2 days -> X axis ticks show time instead
+  //     of month/day, since month/day would repeat across every tick.
+  // Both are guarded for 0/1-point data (no gaps to measure / no span to compare).
+  const gaps =
+    data && data.length > 1
+      ? data
+          .slice(1)
+          .map((p, i) => p.t - data[i].t)
+          .sort((a, b) => a - b)
+      : [];
+  const fine = median(gaps) < 86400;
+  const intraday = Boolean(data && data.length > 1 && data[data.length - 1].t - data[0].t <= 2 * 86400);
+
   return (
     <div ref={ref} style={{ height }} className="w-full">
       {width > 0 && (
@@ -91,7 +125,7 @@ export default function TrendChart({ data, series, volumeKey, height = 224, doma
           <CartesianGrid stroke="#1f2738" strokeDasharray="3 3" vertical={false} />
           <XAxis
             dataKey="t"
-            tickFormatter={fmtTs}
+            tickFormatter={intraday ? fmtTime : fmtDate}
             tick={{ fill: "#8a97ac", fontSize: 11 }}
             stroke="#1f2738"
             minTickGap={48}
@@ -115,7 +149,7 @@ export default function TrendChart({ data, series, volumeKey, height = 224, doma
               width={42}
             />
           )}
-          <Tooltip content={<TrendTooltip series={series} volumeKey={volumeKey} />} />
+          <Tooltip content={<TrendTooltip series={series} volumeKey={volumeKey} fine={fine} />} />
           <Legend
             iconType="plainline"
             wrapperStyle={{ fontSize: 12, color: "#8a97ac" }}

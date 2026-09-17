@@ -65,8 +65,13 @@ export function fetchPolls() {
 }
 
 // Win-probability history for the control markets: { senate:{sources}, house:{sources} }
-export function fetchControlHistory() {
-  return getJson("/api/control-history", "control-history");
+// Memoized per range (default "all") so switching ranges back and forth in the
+// same session doesn't re-fetch — mirrors fetchRaceHistory below.
+const controlHistoryCache = new Map();
+export function fetchControlHistory(range = "all") {
+  return memoize(controlHistoryCache, range, () =>
+    getJson(`/api/control-history?range=${encodeURIComponent(range)}`, "control-history")
+  );
 }
 
 const oddsCache = new Map();
@@ -80,10 +85,14 @@ export function fetchRaceOdds(stateCode) {
 }
 
 // Historical win-probability time-series per provider: { sources: [{ id, label, points:[{t,dem,rep}], hasData }] }
+// Keyed by stateCode + range so each window is cached independently per race.
 const historyCache = new Map();
-export function fetchRaceHistory(stateCode) {
-  return memoize(historyCache, stateCode, () =>
-    getJson(`/api/history?state=${encodeURIComponent(stateCode)}`, "history")
+export function fetchRaceHistory(stateCode, range = "all") {
+  return memoize(historyCache, `${stateCode}:${range}`, () =>
+    getJson(
+      `/api/history?state=${encodeURIComponent(stateCode)}&range=${encodeURIComponent(range)}`,
+      "history"
+    )
   );
 }
 

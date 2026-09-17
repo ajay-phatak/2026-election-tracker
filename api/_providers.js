@@ -21,6 +21,83 @@ function findRace(code) {
   );
 }
 
+// ---- Market history range presets ----------------------------------------
+// Mirrors the poll-side POLL_RANGES (src/components/RangeSelector.jsx) but
+// carries the upstream fetch parameters each window needs on top of the id/
+// label/days shape: Kalshi's period_interval (candle width, minutes) + span
+// (days) + the bucket width (seconds) used to align dem/rep candles, and
+// Polymarket's prices-history `interval` token + `fidelity` (candle width,
+// minutes) + its own bucket width.
+//
+// "90d" is deliberately identical to "all" on every upstream param
+// (period_interval=1440, interval=max, …) and is narrowed to the trailing 90
+// days *after* the fetch (see sliceSources / bothHistory below). That makes
+// it land on the exact same edgeFetch cache key as "all" — zero extra
+// upstream requests for what's likely the most-used non-default range.
+export const MARKET_RANGES = {
+  all: {
+    id: "all",
+    label: "All",
+    days: null,
+    kalshiPeriodInterval: 1440,
+    kalshiSpanDays: 730,
+    kalshiBucketSeconds: 86400,
+    pmInterval: "max",
+    pmFidelity: 1440,
+    pmBucketSeconds: 86400,
+  },
+  "90d": {
+    id: "90d",
+    label: "90D",
+    days: 90,
+    kalshiPeriodInterval: 1440,
+    kalshiSpanDays: 730,
+    kalshiBucketSeconds: 86400,
+    pmInterval: "max",
+    pmFidelity: 1440,
+    pmBucketSeconds: 86400,
+  },
+  "30d": {
+    id: "30d",
+    label: "30D",
+    days: 30,
+    kalshiPeriodInterval: 60,
+    kalshiSpanDays: 30,
+    kalshiBucketSeconds: 3600,
+    pmInterval: "1m",
+    pmFidelity: 60,
+    pmBucketSeconds: 3600,
+  },
+  "7d": {
+    id: "7d",
+    label: "7D",
+    days: 7,
+    kalshiPeriodInterval: 60,
+    kalshiSpanDays: 7,
+    kalshiBucketSeconds: 3600,
+    pmInterval: "1w",
+    pmFidelity: 60,
+    pmBucketSeconds: 3600,
+  },
+  "24h": {
+    id: "24h",
+    label: "24H",
+    days: 1,
+    kalshiPeriodInterval: 1,
+    kalshiSpanDays: 1,
+    kalshiBucketSeconds: 300,
+    pmInterval: "1d",
+    pmFidelity: 5,
+    pmBucketSeconds: 300,
+  },
+};
+
+// Resolve a range id (possibly unknown/missing, e.g. a stale client or a
+// hand-typed query string) to its MARKET_RANGES entry, defaulting to "all".
+export function resolveMarketRange(range) {
+  return MARKET_RANGES[range] || MARKET_RANGES.all;
+}
+
 const PM_BASE = "https://gamma-api.polymarket.com";
 // Polymarket 403s requests without a UA header.
 const UA = "2026-election-tracker/1.0 (dashboard)";
@@ -173,8 +250,9 @@ async function kalshiFetch(url, { retries = 3, base = 150 } = {}) {
   throw new Error(`${url} -> 429 (retries exhausted)`);
 }
 
-// Daily candles for one Kalshi market -> [{ t, p (0-100), vol }]. Empty on failure.
-async function kalshiCandles(series, ticker, { days = 730, retries, base } = {}) {
+// Candles for one Kalshi market -> [{ t, p (0-100), vol }]. Empty on failure.
+// `periodInterval` is the candle width in minutes (1440 = daily, per MARKET_RANGES).
+async function kalshiCandles(series, ticker, { days = 730, periodInterval = 1440, retries, base } = {}) {
   if (!series || !ticker) return [];
   // Snap end_ts to the edge-cache window so the candle URL is stable within it
   // (a per-second timestamp would make every request a fresh cache key/miss).
@@ -182,15 +260,26 @@ async function kalshiCandles(series, ticker, { days = 730, retries, base } = {})
   const start = end - days * 86400;
   try {
     const d = await kalshiFetch(
-      `${KALSHI_ELECTIONS}/series/${series}/markets/${ticker}/candlesticks?period_interval=1440&start_ts=${start}&end_ts=${end}`,
+      `${KALSHI_ELECTIONS}/series/${series}/markets/${ticker}/candlesticks?period_interval=${periodInterval}&start_ts=${start}&end_ts=${end}`,
       { retries, base }
     );
     return (d.candlesticks || [])
-      .map((c) => ({
-        t: c.end_period_ts,
-        p: c.price?.close_dollars != null ? Math.round(parseFloat(c.price.close_dollars) * 1000) / 10 : null,
-        vol: c.volume_fp != null ? Math.round(parseFloat(c.volume_fp)) : 0,
-      }))
+      .map((c) => {
+        // At sub-daily intervals most candles for a thin market carry NO trade
+        // (no close_dollars) — just price.previous_dollars (the last known
+        // price, carried forward). Verified against live data: Georgia Senate
+        // hourly candles had a close in only 20 of 72 hours, vs. 70 of 71 for
+        // the liquid Senate-control market. Without this fallback a 24H chart
+        // of a state race is a handful of disconnected dots; a candle with
+        // neither field is still dropped below. Volume is left as-is — an
+        // untraded period genuinely had 0 volume.
+        const close = c.price?.close_dollars ?? c.price?.previous_dollars;
+        return {
+          t: c.end_period_ts,
+          p: close != null ? Math.round(parseFloat(close) * 1000) / 10 : null,
+          vol: c.volume_fp != null ? Math.round(parseFloat(c.volume_fp)) : 0,
+        };
+      })
       .filter((x) => x.p != null);
   } catch {
     return [];
@@ -217,17 +306,37 @@ async function kalshiCandleOdds(cfg, opts) {
 }
 
 // Full Kalshi candle history -> { points:[{t,dem,rep,volume}], hasData }.
-async function kalshiCandleHistory(cfg) {
+// `range` selects the candle width + lookback span (MARKET_RANGES); "90d"
+// reuses "all"'s params (same cache key upstream) and is sliced afterward in
+// bothHistory, so it never reaches here needing different params than "all".
+async function kalshiCandleHistory(cfg, range = "all") {
   if (!cfg) return { points: [], hasData: false };
+  const { kalshiPeriodInterval, kalshiSpanDays, kalshiBucketSeconds } = resolveMarketRange(range);
   // Lazy, user-initiated request (no burst) -> retry patiently so the candle
   // history actually lands instead of failing fast to an empty line.
   const [dem, rep] = await Promise.all([
-    kalshiCandles(cfg.series, cfg.demTicker, PATIENT),
-    kalshiCandles(cfg.series, cfg.repTicker, PATIENT),
+    kalshiCandles(cfg.series, cfg.demTicker, { ...PATIENT, days: kalshiSpanDays, periodInterval: kalshiPeriodInterval }),
+    kalshiCandles(cfg.series, cfg.repTicker, { ...PATIENT, days: kalshiSpanDays, periodInterval: kalshiPeriodInterval }),
   ]);
-  const day = (t) => Math.floor(t / 86400) * 86400;
-  const demByT = new Map(dem.map((x) => [day(x.t), x]));
-  const repByT = new Map(rep.map((x) => [day(x.t), x]));
+  const bucket = (t) => Math.floor(t / kalshiBucketSeconds) * kalshiBucketSeconds;
+  // Bucket each side's candles independently. Volume SUMS within a bucket
+  // rather than last-write-wins: at the daily granularity ("all"/"90d") each
+  // bucket holds exactly one candle so this is a no-op, but at 24h five
+  // 1-minute candles land in each 300s bucket and an overwrite would silently
+  // understate the volume bars. Price takes the LAST candle in the bucket (a
+  // close) — kalshiCandles already dropped candles with no price at all, so
+  // every entry here has a real `p` and a plain overwrite gives us "last".
+  const bucketSide = (arr) => {
+    const map = new Map();
+    for (const x of arr) {
+      const t = bucket(x.t);
+      const prevVol = map.get(t)?.vol || 0;
+      map.set(t, { p: x.p, vol: prevVol + x.vol });
+    }
+    return map;
+  };
+  const demByT = bucketSide(dem);
+  const repByT = bucketSide(rep);
   const times = [...new Set([...demByT.keys(), ...repByT.keys()])].sort((a, b) => a - b);
   const points = times.map((t) => {
     const dd = demByT.get(t);
@@ -235,6 +344,25 @@ async function kalshiCandleHistory(cfg) {
     return { t, dem: dd ? dd.p : null, rep: rr ? rr.p : null, volume: (dd ? dd.vol : 0) + (rr ? rr.vol : 0) };
   });
   return { points, hasData: points.length > 0 };
+}
+
+// Slice each source's points to the trailing `days`, anchored to the NEWEST
+// POINT IN THAT SOURCE's own series (not Date.now()) — mirrors sliceRange in
+// RangeSelector.jsx. Polymarket and Kalshi candles can go stale independently,
+// so each source is sliced against its own newest point. `days` null/0 is a
+// no-op. Exported so the Cloudflare worker (functions/api/[[route]].js) can
+// apply the same "slice a KV-cached 'all' payload down to 90d" trick without
+// an extra upstream fetch.
+export function sliceSources(sources, days) {
+  if (!days) return sources;
+  return sources.map((s) => {
+    const points = s.points || [];
+    if (points.length === 0) return s;
+    const newest = points[points.length - 1].t;
+    const cutoff = newest - days * 86400;
+    const sliced = points.filter((p) => p.t >= cutoff);
+    return { ...s, points: sliced, hasData: sliced.length > 0 };
+  });
 }
 
 // ---- Compose ------------------------------------------------------------
@@ -357,12 +485,13 @@ async function polymarketTokens(slug, partyHints) {
   }
 }
 
-// fidelity is the candle width in minutes (1440 = daily).
-async function pricesHistory(token, fidelity = 1440) {
+// `interval` is Polymarket's own lookback-window token (max/1m/1w/1d); `fidelity`
+// is the candle width in minutes. Both come from the selected MARKET_RANGES entry.
+async function pricesHistory(token, interval = "max", fidelity = 1440) {
   if (!token) return [];
   try {
     const d = await getJson(
-      `${CLOB_BASE}/prices-history?market=${token}&interval=max&fidelity=${fidelity}`
+      `${CLOB_BASE}/prices-history?market=${token}&interval=${interval}&fidelity=${fidelity}`
     );
     return (d.history || []).map((pt) => ({ t: pt.t, p: Math.round(pt.p * 1000) / 10 }));
   } catch {
@@ -370,53 +499,66 @@ async function pricesHistory(token, fidelity = 1440) {
   }
 }
 
-// Align the two Yes-token series into [{ t, dem, rep }]. Snap to the UTC day so the
-// two tokens (whose candle timestamps differ by a few seconds) line up instead of
-// producing alternating half-null rows.
-function mergeSeries(dem, rep) {
-  const day = (t) => Math.floor(t / 86400) * 86400;
-  const demByT = new Map(dem.map((x) => [day(x.t), x.p]));
-  const repByT = new Map(rep.map((x) => [day(x.t), x.p]));
+// Align the two Yes-token series into [{ t, dem, rep }]. Snap to `bucketSeconds`
+// (86400 = daily) so the two tokens (whose candle timestamps differ by a few
+// seconds) line up instead of producing alternating half-null rows. Prices-history
+// has no per-point volume, so — unlike kalshiCandleHistory's bucketing — there's
+// nothing to sum here; a plain Map overwrite already gives "last point wins" as
+// long as the input is time-ordered, which pricesHistory returns.
+function mergeSeries(dem, rep, bucketSeconds = 86400) {
+  const bucket = (t) => Math.floor(t / bucketSeconds) * bucketSeconds;
+  const demByT = new Map(dem.map((x) => [bucket(x.t), x.p]));
+  const repByT = new Map(rep.map((x) => [bucket(x.t), x.p]));
   const times = [...new Set([...demByT.keys(), ...repByT.keys()])].sort((a, b) => a - b);
   return times.map((t) => ({ t, dem: demByT.get(t) ?? null, rep: repByT.get(t) ?? null }));
 }
 
 // Polymarket win-probability history (price line + aggregate volume; no per-point volume).
-async function polymarketEventHistory(slug, partyHints) {
+async function polymarketEventHistory(slug, partyHints, range = "all") {
   const { demToken, repToken, volume } = await polymarketTokens(slug, partyHints);
-  const [dem, rep] = await Promise.all([pricesHistory(demToken), pricesHistory(repToken)]);
-  const points = mergeSeries(dem, rep);
+  const { pmInterval, pmFidelity, pmBucketSeconds } = resolveMarketRange(range);
+  const [dem, rep] = await Promise.all([
+    pricesHistory(demToken, pmInterval, pmFidelity),
+    pricesHistory(repToken, pmInterval, pmFidelity),
+  ]);
+  const points = mergeSeries(dem, rep, pmBucketSeconds);
   return { points, hasData: points.length > 0, volume };
 }
 
 // Polymarket carries the price line (+ aggregate volume); Kalshi carries price +
 // per-day volume bars (hasVolumeSeries). Shared by control markets and state races.
-async function bothHistory(polymarketSlug, kalshiCfg, partyHints) {
+// NOTE: Polymarket and Kalshi are never merged with each other — they stay as
+// separate `sources` entries, each bucketed only against its own dem/rep pair,
+// so the two can (and per MARKET_RANGES, do) use different bucket sizes.
+async function bothHistory(polymarketSlug, kalshiCfg, partyHints, range = "all") {
   const [pm, ks] = await Promise.all([
-    polymarketEventHistory(polymarketSlug, partyHints),
-    kalshiCandleHistory(kalshiCfg),
+    polymarketEventHistory(polymarketSlug, partyHints, range),
+    kalshiCandleHistory(kalshiCfg, range),
   ]);
-  return {
-    sources: [
-      { id: "polymarket", label: "Polymarket", points: pm.points, hasData: pm.hasData, volume: pm.volume },
-      { id: "kalshi", label: "Kalshi", points: ks.points, hasData: ks.hasData, hasVolumeSeries: true },
-    ],
-  };
+  let sources = [
+    { id: "polymarket", label: "Polymarket", points: pm.points, hasData: pm.hasData, volume: pm.volume },
+    { id: "kalshi", label: "Kalshi", points: ks.points, hasData: ks.hasData, hasVolumeSeries: true },
+  ];
+  // "90d" fetched with the SAME upstream params as "all" (see MARKET_RANGES) so
+  // it hits the same edgeFetch cache key — no extra upstream requests — and is
+  // narrowed to the trailing 90 days here, after the fetch, instead.
+  if (range === "90d") sources = sliceSources(sources, 90);
+  return { sources };
 }
 
-export async function getRaceHistory(stateCode) {
+export async function getRaceHistory(stateCode, range = "all") {
   const race = findRace(stateCode);
   if (!race) return null;
   return {
     stateCode,
-    ...(await bothHistory(race.polymarketSlug, kalshiCfgForRace(race), race.pollParties)),
+    ...(await bothHistory(race.polymarketSlug, kalshiCfgForRace(race), race.pollParties, range)),
   };
 }
 
-export async function getControlHistory() {
+export async function getControlHistory(range = "all") {
   const [senate, house] = await Promise.all([
-    bothHistory(CONTROL_MARKETS.senate.polymarketSlug, CONTROL_MARKETS.senate.kalshi),
-    bothHistory(CONTROL_MARKETS.house.polymarketSlug, CONTROL_MARKETS.house.kalshi),
+    bothHistory(CONTROL_MARKETS.senate.polymarketSlug, CONTROL_MARKETS.senate.kalshi, undefined, range),
+    bothHistory(CONTROL_MARKETS.house.polymarketSlug, CONTROL_MARKETS.house.kalshi, undefined, range),
   ]);
   return { senate, house };
 }

@@ -14,6 +14,7 @@ import {
   getControlHistory,
   getRaceHistory,
   getAllHouseRaces,
+  sliceSources,
 } from "../../api/_providers.js";
 import { getRacePolls, getAllRacePolls, getMacroPolls } from "../../api/_polls.js";
 import { getRaceNews } from "../../api/_news.js";
@@ -27,6 +28,15 @@ function json(data, { status = 200, cache } = {}) {
 
 const missingState = () => json({ error: "missing ?state=" }, { status: 400 });
 const unknownState = (state) => json({ error: `unknown state ${state}` }, { status: 404 });
+
+// Market-history range plumbing (control-history + history routes). Intraday
+// windows (30d/7d/24h) get a short cache since they're a live upstream fetch;
+// all/90d keep the longer window (90d rides the same KV/"all" payload — see below).
+const INTRADAY_RANGES = new Set(["30d", "7d", "24h"]);
+const historyCacheFor = (range) =>
+  INTRADAY_RANGES.has(range)
+    ? "public, max-age=60, s-maxage=60, stale-while-revalidate=300"
+    : "public, max-age=300, s-maxage=300, stale-while-revalidate=900";
 
 // Read an aggregate key's { data, updatedAt } envelope from Workers KV (written
 // by the scheduled warmer, /api/refresh). Returns undefined when there's nothing
@@ -124,10 +134,35 @@ export async function onRequestGet({ request, env }) {
           cache: "public, max-age=60, s-maxage=60, stale-while-revalidate=300",
         });
 
-      case "control-history":
-        return json(await served(env, "control-history", getControlHistory), {
-          cache: "public, max-age=300, s-maxage=300, stale-while-revalidate=900",
-        });
+      case "control-history": {
+        const range = String(url.searchParams.get("range") || "all");
+        const cache = historyCacheFor(range);
+        // Intraday windows are daily-KV-incompatible — the warmer only ever
+        // writes the "all" payload — so bypass KV entirely and hit the live
+        // provider with the range. This is the ONE market route on the hot
+        // path where that's acceptable: it's a user-initiated drill-down, not
+        // page-load traffic.
+        if (INTRADAY_RANGES.has(range)) {
+          return json(await getControlHistory(range), { cache });
+        }
+        // "all"/"90d": serve from KV as today. "90d" reuses the cached "all"
+        // payload (identical upstream params, see MARKET_RANGES) and is
+        // narrowed to 90 days right here in the worker via sliceSources —
+        // keeping the most likely non-default range completely off the
+        // rate-limited upstream path, which is the whole reason this KV layer
+        // exists (Cloudflare's shared egress IP gets rate-limited by Kalshi/
+        // Polymarket otherwise).
+        const cached = await kvGet(env, "control-history");
+        if (cached === undefined) return json(await getControlHistory(range), { cache });
+        const data =
+          range === "90d"
+            ? {
+                senate: { sources: sliceSources(cached.senate.sources, 90) },
+                house: { sources: sliceSources(cached.house.sources, 90) },
+              }
+            : cached;
+        return json(data, { cache });
+      }
 
       case "polls":
         return json(await served(env, "polls", getMacroPolls), {
@@ -162,10 +197,26 @@ export async function onRequestGet({ request, env }) {
 
       case "history": {
         if (!state) return missingState();
-        const data = await fromAgg("histories", () => getRaceHistory(state));
-        return data
-          ? json(data, { cache: "public, max-age=300, s-maxage=300, stale-while-revalidate=900" })
-          : unknownState(state);
+        const range = String(url.searchParams.get("range") || "all");
+        const cache = historyCacheFor(range);
+        // Same all/90d-vs-live rule as control-history above, just indexed by
+        // state instead of senate/house. Not routed through fromAgg() because
+        // "90d" needs to slice the per-state entry before returning it.
+        if (INTRADAY_RANGES.has(range)) {
+          const data = await getRaceHistory(state, range);
+          return data ? json(data, { cache }) : unknownState(state);
+        }
+        const agg = await kvGet(env, "histories");
+        const cached = agg && agg[state] !== undefined ? agg[state] : undefined;
+        if (cached === undefined) {
+          const data = await getRaceHistory(state, range);
+          return data ? json(data, { cache }) : unknownState(state);
+        }
+        const data =
+          range === "90d"
+            ? { stateCode: cached.stateCode, sources: sliceSources(cached.sources, 90) }
+            : cached;
+        return json(data, { cache });
       }
 
       case "race-news": {
