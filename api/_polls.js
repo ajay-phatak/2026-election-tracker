@@ -91,15 +91,31 @@ function rollingTrend(polls, isLeft, isRight, { windowDays = 30, maxDays = 540, 
   });
   const newest = out[out.length - 1].t;
   out = out.filter((p) => p.t >= newest - maxDays * 86400);
-  if (out.length > maxPoints) {
-    const step = Math.ceil(out.length / maxPoints);
-    out = out.filter((_, i) => i % step === 0 || i === out.length - 1);
-  }
-  return out;
+  return downsample(out, { maxPoints });
 }
 
 const nameTrend = (trend, leftKey, rightKey) =>
   trend.map((p) => ({ t: p.t, [leftKey]: p.left, [rightKey]: p.right }));
+
+// Shared downsampler for rollingTrend + averageTrend. A flat "one point per N"
+// thinning (the old behavior) treats the whole series uniformly, so a 540-day
+// "All" window at maxPoints=130 works out to ~1 point every 5 days — fine for
+// the full view, but it also starves a 30D/90D range selector down to a
+// handful of dots. Instead only the tail OLDER than `keepRecentDays` gets
+// thinned; the recent window stays at full daily resolution so the range
+// selector always has real data to zoom into. `out` must already be sorted
+// oldest -> newest. This still caps the payload at roughly maxPoints (older)
+// + keepRecentDays (recent) points, which matters because these trends ship
+// inside the single /api/bootstrap first-paint payload.
+function downsample(out, { maxPoints = 130, keepRecentDays = 90 } = {}) {
+  if (out.length <= maxPoints) return out;
+  const cutoff = out[out.length - 1].t - keepRecentDays * 86400;
+  const older = out.filter((p) => p.t < cutoff);
+  const recent = out.filter((p) => p.t >= cutoff);
+  if (older.length <= maxPoints) return out;
+  const step = Math.ceil(older.length / maxPoints);
+  return [...older.filter((_, i) => i % step === 0), ...recent];
+}
 
 // ---- matchers ----
 const lc = (c) => (c || "").toLowerCase();
@@ -131,11 +147,7 @@ function averageTrend(values, leftKey, rightKey, { maxPoints = 130 } = {}) {
     })
     .filter((p) => Number.isFinite(p.t) && (p[leftKey] != null || p[rightKey] != null))
     .sort((a, b) => a.t - b.t);
-  if (out.length > maxPoints) {
-    const step = Math.ceil(out.length / maxPoints);
-    out = out.filter((_, i) => i % step === 0 || i === out.length - 1);
-  }
-  return out;
+  return downsample(out, { maxPoints });
 }
 
 // ---- public API ----

@@ -6,9 +6,11 @@ import {
   fetchRaceHistory,
   fetchRacePolls,
   fetchRaceNews,
+  prefetchRaceHistoryRanges,
   sourceHasData,
 } from "../lib/api";
 import OverlapBar, { overlapInfo } from "./OverlapBar";
+import RangeSelector, { POLL_RANGES, MARKET_RANGES, sliceRange } from "./RangeSelector";
 import SourceTag from "./SourceTag";
 import TrendChart from "./TrendChart";
 import VolumeStat from "./VolumeStat";
@@ -169,6 +171,8 @@ export default function RaceDrawer({ stateCode, onClose }) {
   const [expandedSource, setExpandedSource] = useState(null);
   const [polls, setPolls] = useState(null);
   const [pollsStatus, setPollsStatus] = useState("loading");
+  const [pollRange, setPollRange] = useState("all");
+  const [marketRange, setMarketRange] = useState("all");
   const [news, setNews] = useState(null);
   const [newsStatus, setNewsStatus] = useState("loading");
 
@@ -179,19 +183,16 @@ export default function RaceDrawer({ stateCode, onClose }) {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setOddsStatus("loading");
     setOdds(null);
-    setHistoryStatus("loading");
-    setHistory(null);
     setExpandedSource(null);
     setPollsStatus("loading");
     setPolls(null);
+    setPollRange("all"); // don't carry a stale 30D/90D window into the next race
+    setMarketRange("all"); // ditto for the odds-history range
     setNewsStatus("loading");
     setNews(null);
     fetchRaceOdds(activeCode)
       .then((d) => alive && (setOdds(d), setOddsStatus("ok")))
       .catch(() => alive && setOddsStatus("error"));
-    fetchRaceHistory(activeCode)
-      .then((d) => alive && (setHistory(d), setHistoryStatus("ok")))
-      .catch(() => alive && setHistoryStatus("error"));
     fetchRacePolls(activeCode)
       .then((d) => alive && (setPolls(d), setPollsStatus("ok")))
       .catch(() => alive && setPollsStatus("error"));
@@ -202,6 +203,49 @@ export default function RaceDrawer({ stateCode, onClose }) {
       alive = false;
     };
   }, [activeCode]);
+
+  // Odds history is fetched in its own effect, keyed on the selected market
+  // range as well as the race, so changing the RangeSelector re-fetches
+  // (showing the loading skeleton meanwhile) without also re-fetching odds/
+  // polls/news above. The race-change effect above resets `marketRange` to
+  // "all", which — combined with `activeCode` changing — still fires this
+  // exactly once per race switch.
+  useEffect(() => {
+    if (!activeCode) return;
+    let alive = true;
+    // Same synchronous "reset to loading before the async fetch" idiom already
+    // used above (setOddsStatus) and in MacroMetrics — flagged by this rule
+    // there too; suppressed rather than restructured to match.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setHistoryStatus("loading");
+    setHistory(null);
+    fetchRaceHistory(activeCode, marketRange)
+      .then((d) => alive && (setHistory(d), setHistoryStatus("ok")))
+      .catch(() => alive && setHistoryStatus("error"));
+    return () => {
+      alive = false;
+    };
+  }, [activeCode, marketRange]);
+
+  // Quietly warm the other four provider-history ranges once the user has
+  // actually expanded a chart (expandedSource set — that's when the range
+  // selector becomes visible) AND the range they're looking at has loaded.
+  // Deliberately a separate effect from the one above: that effect fetches
+  // history on every drawer open regardless of expandedSource, and firing a
+  // 4-request sweep before the user has asked to see any history at all would
+  // defeat the point of gating this on expand. The `alive` flag is threaded
+  // into the sweep as `shouldContinue` so that clicking through several states
+  // with a chart expanded can't leave a previous state's sweep still issuing
+  // requests after the drawer has moved on — cleanup flips it false and the
+  // sweep stops before its next request.
+  useEffect(() => {
+    if (!expandedSource || historyStatus !== "ok") return;
+    let alive = true;
+    prefetchRaceHistoryRanges(activeCode, marketRange, () => alive);
+    return () => {
+      alive = false;
+    };
+  }, [expandedSource, historyStatus, activeCode, marketRange]);
 
   const race = activeCode ? getRaceByCode(activeCode) : null;
   // Senate races carry a `category`; House districts carry a `rating`.
@@ -306,9 +350,12 @@ export default function RaceDrawer({ stateCode, onClose }) {
                     {/* Expanded historical chart */}
                     {expandedSource && (
                       <div className="mt-3 rounded-lg border border-ops-border bg-ops-panel-2/40 p-3">
-                        <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-ops-muted">
-                          {expandedLabel} · win probability over time
-                          <SourceTag kind="market" />
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-ops-muted">
+                            {expandedLabel} · win probability over time
+                            <SourceTag kind="market" />
+                          </div>
+                          <RangeSelector value={marketRange} onChange={setMarketRange} ranges={MARKET_RANGES} />
                         </div>
                         {historyStatus === "loading" && (
                           <div className="h-56 animate-pulse rounded bg-ops-panel-2/60" />
@@ -380,7 +427,16 @@ export default function RaceDrawer({ stateCode, onClose }) {
                     <OverlapBar demYes={polls.dem} repYes={polls.rep} />
                     {polls.trend?.length > 1 && (
                       <div className="mt-3">
-                        <TrendChart data={polls.trend} series={POLL_SERIES} />
+                        <div className="mb-2 flex justify-end">
+                          <RangeSelector value={pollRange} onChange={setPollRange} data={polls.trend} />
+                        </div>
+                        <TrendChart
+                          data={sliceRange(
+                            polls.trend,
+                            POLL_RANGES.find((r) => r.id === pollRange)?.days ?? null
+                          )}
+                          series={POLL_SERIES}
+                        />
                       </div>
                     )}
                     <p className="mt-2 text-[10px] uppercase tracking-wide text-ops-muted/70">

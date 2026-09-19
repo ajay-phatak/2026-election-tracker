@@ -81,8 +81,13 @@ export function fetchPolls() {
 }
 
 // Win-probability history for the control markets: { senate:{sources}, house:{sources} }
-export function fetchControlHistory() {
-  return getJson("/api/control-history", "control-history");
+// Memoized per range (default "all") so switching ranges back and forth in the
+// same session doesn't re-fetch — mirrors fetchRaceHistory below.
+const controlHistoryCache = new Map();
+export function fetchControlHistory(range = "all") {
+  return memoize(controlHistoryCache, range, () =>
+    getJson(`/api/control-history?range=${encodeURIComponent(range)}`, "control-history")
+  );
 }
 
 const oddsCache = new Map();
@@ -96,10 +101,14 @@ export function fetchRaceOdds(stateCode) {
 }
 
 // Historical win-probability time-series per provider: { sources: [{ id, label, points:[{t,dem,rep}], hasData }] }
+// Keyed by stateCode + range so each window is cached independently per race.
 const historyCache = new Map();
-export function fetchRaceHistory(stateCode) {
-  return memoize(historyCache, stateCode, () =>
-    getJson(`/api/history?state=${encodeURIComponent(stateCode)}`, "history")
+export function fetchRaceHistory(stateCode, range = "all") {
+  return memoize(historyCache, `${stateCode}:${range}`, () =>
+    getJson(
+      `/api/history?state=${encodeURIComponent(stateCode)}&range=${encodeURIComponent(range)}`,
+      "history"
+    )
   );
 }
 
@@ -148,6 +157,77 @@ export async function fetchRacePolls(stateCode) {
   const all = await fetchAllRacePolls();
   return (
     all[stateCode] || { stateCode, dem: null, rep: null, n: 0, lastUpdated: null, trend: [] }
+  );
+}
+
+// Market-range ids in fetch order. Mirrors MARKET_RANGES in
+// src/components/RangeSelector.jsx (id field only — label/days stay there,
+// they're UI concerns) — src/lib must not import from src/components, so this
+// list is duplicated; keep it in sync if RangeSelector's ranges change.
+const MARKET_RANGE_IDS = ["all", "90d", "30d", "7d", "24h"];
+
+// Run `fn(id)` for every market range except `current` (already being fetched
+// by the caller), one at a time. Sequential on purpose: 3 of the 5 ranges
+// proxy through the Vercel origin, and bursting all 4 remaining requests at
+// once per chart expand is exactly the kind of fan-out this file otherwise
+// avoids (see prefetchRaces below) — the user is looking at `current` already,
+// there's no rush on the rest. `shouldContinue`, if given, is checked before
+// each request so a caller can abandon an in-flight sweep (e.g. the drawer
+// moved to a different race) without it keeping firing requests in the
+// background.
+async function sweepMarketRanges(current, fn, shouldContinue) {
+  for (const id of MARKET_RANGE_IDS) {
+    if (id === current) continue;
+    if (shouldContinue && !shouldContinue()) return;
+    await fn(id).catch(() => {});
+  }
+}
+
+// One sweep per key ("control", or `race:${stateCode}`) per session — the
+// per-range memoization above already dedupes actual network calls, this just
+// stops re-expanding the same panel from re-walking the range list.
+const prefetchedSweeps = new Set();
+
+// Schedule a sweep off the critical path. Deliberately a plain timer and NOT
+// requestIdleCallback: rIC never fires while the document is hidden, so
+// opening the dashboard in a background tab (middle-click, "open in new tab")
+// silently skipped the whole sweep. Timers still fire there — throttled, which
+// is fine for a prefetch. The delay is belt-and-braces anyway: callers only
+// invoke this once the fetch the user is actually waiting on has resolved.
+//
+// The dedupe key is claimed INSIDE the callback, not at schedule time, so a
+// sweep that never got to run can't permanently mark itself done — that was
+// the other half of the background-tab bug.
+function scheduleSweep(key, current, fn, shouldContinue) {
+  if (prefetchedSweeps.has(key)) return;
+  setTimeout(() => {
+    if (prefetchedSweeps.has(key)) return;
+    if (shouldContinue && !shouldContinue()) return;
+    prefetchedSweeps.add(key);
+    sweepMarketRanges(current, fn, shouldContinue);
+  }, 500);
+}
+
+// Quietly warm the other control-history ranges once the panel the user
+// opened has loaded, so flipping Senate/House Control's range selector is
+// instant. Called from MacroMetrics only after the current range's fetch
+// succeeds — never on page load (bootstrap must stay the only request a
+// visitor who never expands a chart pays for).
+export function prefetchControlHistoryRanges(current = "all") {
+  scheduleSweep("control", current, fetchControlHistory);
+}
+
+// Same idea for a race's provider history. `shouldContinue` lets RaceDrawer
+// cancel an in-flight sweep when the user has since moved on to another race
+// (see the drawer's effect) — without it, rapidly clicking through states
+// with a chart expanded could leave several abandoned sweeps still issuing
+// requests for races no longer on screen.
+export function prefetchRaceHistoryRanges(stateCode, current = "all", shouldContinue) {
+  scheduleSweep(
+    `race:${stateCode}`,
+    current,
+    (id) => fetchRaceHistory(stateCode, id),
+    shouldContinue
   );
 }
 

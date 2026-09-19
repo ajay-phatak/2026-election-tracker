@@ -14,6 +14,7 @@ import {
   getControlHistory,
   getRaceHistory,
   getAllHouseRaces,
+  sliceSources,
 } from "../../api/_providers.js";
 import { getRacePolls, getAllRacePolls, getMacroPolls } from "../../api/_polls.js";
 import { getRaceNews } from "../../api/_news.js";
@@ -27,6 +28,44 @@ function json(data, { status = 200, cache } = {}) {
 
 const missingState = () => json({ error: "missing ?state=" }, { status: 400 });
 const unknownState = (state) => json({ error: `unknown state ${state}` }, { status: 404 });
+
+// Market-history range plumbing (control-history + history routes). Intraday
+// windows (30d/7d/24h) get a short cache since they're fetched on demand rather
+// than served from the warmer's KV; all/90d keep the longer window (90d rides
+// the same KV/"all" payload — see below).
+const INTRADAY_RANGES = new Set(["30d", "7d", "24h"]);
+const historyCacheFor = (range) =>
+  INTRADAY_RANGES.has(range)
+    ? "public, max-age=60, s-maxage=60, stale-while-revalidate=300"
+    : "public, max-age=300, s-maxage=300, stale-while-revalidate=900";
+
+// ORIGIN-MIRROR FOR INTRADAY, for the same reason /api/refresh uses it (see the
+// header comment there): calling the providers directly from here means calling
+// them from Cloudflare's shared, rate-limited egress IP. Kalshi hard-blocks it —
+// verified in production, where every intraday range returned an empty Kalshi
+// series (the PATIENT retry budget exhausting) while the identical request
+// succeeded from a clean IP and from the Vercel origin. Polymarket tolerates the
+// shared IP, which is why only the Kalshi half of those charts went blank.
+//
+// The all/90d paths never had this problem because they're served from KV, which
+// the warmer fills by mirroring this same origin. So intraday does the mirroring
+// inline instead: one reliable subrequest against a clean IP, still fresh (no KV
+// staleness), and no new keys for the warmer to maintain.
+const DEFAULT_ORIGIN = "https://2026-election-tracker.vercel.app";
+
+// Fetch one intraday payload from the clean-IP origin. Returns undefined on any
+// failure so the caller can fall back to a direct provider call — degraded
+// (Polymarket lands, Kalshi likely doesn't) but never a blank 500.
+async function fromOrigin(env, path) {
+  const origin = (env?.WARM_ORIGIN || DEFAULT_ORIGIN).replace(/\/+$/, "");
+  try {
+    const r = await fetch(`${origin}${path}`, { headers: { Accept: "application/json" } });
+    if (!r.ok) return undefined;
+    return await r.json();
+  } catch {
+    return undefined;
+  }
+}
 
 // Read an aggregate key's { data, updatedAt } envelope from Workers KV (written
 // by the scheduled warmer, /api/refresh). Returns undefined when there's nothing
@@ -124,10 +163,35 @@ export async function onRequestGet({ request, env }) {
           cache: "public, max-age=60, s-maxage=60, stale-while-revalidate=300",
         });
 
-      case "control-history":
-        return json(await served(env, "control-history", getControlHistory), {
-          cache: "public, max-age=300, s-maxage=300, stale-while-revalidate=900",
-        });
+      case "control-history": {
+        const range = String(url.searchParams.get("range") || "all");
+        const cache = historyCacheFor(range);
+        // Intraday windows are daily-KV-incompatible — the warmer only ever
+        // writes the "all" payload — so they're fetched on demand, through the
+        // clean-IP origin (see fromOrigin above) rather than straight from the
+        // providers.
+        if (INTRADAY_RANGES.has(range)) {
+          const mirrored = await fromOrigin(env, `/api/control-history?range=${range}`);
+          return json(mirrored ?? (await getControlHistory(range)), { cache });
+        }
+        // "all"/"90d": serve from KV as today. "90d" reuses the cached "all"
+        // payload (identical upstream params, see MARKET_RANGES) and is
+        // narrowed to 90 days right here in the worker via sliceSources —
+        // keeping the most likely non-default range completely off the
+        // rate-limited upstream path, which is the whole reason this KV layer
+        // exists (Cloudflare's shared egress IP gets rate-limited by Kalshi/
+        // Polymarket otherwise).
+        const cached = await kvGet(env, "control-history");
+        if (cached === undefined) return json(await getControlHistory(range), { cache });
+        const data =
+          range === "90d"
+            ? {
+                senate: { sources: sliceSources(cached.senate.sources, 90) },
+                house: { sources: sliceSources(cached.house.sources, 90) },
+              }
+            : cached;
+        return json(data, { cache });
+      }
 
       case "polls":
         return json(await served(env, "polls", getMacroPolls), {
@@ -162,10 +226,31 @@ export async function onRequestGet({ request, env }) {
 
       case "history": {
         if (!state) return missingState();
-        const data = await fromAgg("histories", () => getRaceHistory(state));
-        return data
-          ? json(data, { cache: "public, max-age=300, s-maxage=300, stale-while-revalidate=900" })
-          : unknownState(state);
+        const range = String(url.searchParams.get("range") || "all");
+        const cache = historyCacheFor(range);
+        // Same all/90d-vs-live rule as control-history above, just indexed by
+        // state instead of senate/house. Not routed through fromAgg() because
+        // "90d" needs to slice the per-state entry before returning it.
+        if (INTRADAY_RANGES.has(range)) {
+          const mirrored = await fromOrigin(
+            env,
+            `/api/history?state=${encodeURIComponent(state)}&range=${range}`
+          );
+          if (mirrored) return json(mirrored, { cache });
+          const data = await getRaceHistory(state, range);
+          return data ? json(data, { cache }) : unknownState(state);
+        }
+        const agg = await kvGet(env, "histories");
+        const cached = agg && agg[state] !== undefined ? agg[state] : undefined;
+        if (cached === undefined) {
+          const data = await getRaceHistory(state, range);
+          return data ? json(data, { cache }) : unknownState(state);
+        }
+        const data =
+          range === "90d"
+            ? { stateCode: cached.stateCode, sources: sliceSources(cached.sources, 90) }
+            : cached;
+        return json(data, { cache });
       }
 
       case "race-news": {
