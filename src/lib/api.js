@@ -10,10 +10,26 @@
 //
 // Per-state requests are memoized for the session (only 9 states). Reload to refresh.
 
+import { validOdds, preserveGood, markStale } from './quality.js';
 async function getJson(url, label) {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`${label} ${r.status}`);
-  return r.json();
+  const key = `election-tracker:last-good:${url}`;
+  let old;
+  try { old = JSON.parse(localStorage.getItem(key)); } catch { /* storage optional */ }
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`${label} ${r.status}`);
+    const raw = await r.json();
+    const data = preserveGood(raw, old);
+    if (JSON.stringify(data).includes('"stale":true')) window.dispatchEvent(new CustomEvent('election-tracker-stale', { detail: label }));
+    try { localStorage.setItem(key, JSON.stringify(data)); } catch { /* quota/private mode */ }
+    return data;
+  } catch (error) {
+    if (old) {
+      window.dispatchEvent(new CustomEvent('election-tracker-stale', { detail: label }));
+      return markStale(old);
+    }
+    throw error;
+  }
 }
 
 // Memoize a promise per key; drop it on failure so a later call can retry.
@@ -231,5 +247,5 @@ export function prefetchRaces(stateCodes) {
 
 // True when a normalized source actually carries odds.
 export function sourceHasData(s) {
-  return Boolean(s && s.demYes != null && s.repYes != null);
+  return validOdds(s);
 }

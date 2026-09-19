@@ -166,9 +166,9 @@ async function getJson(url, { retries = PATIENT.retries, base = PATIENT.base } =
 
 // 0-1 probability -> 0-100 with one decimal.
 function toPct(x) {
-  if (x == null) return null;
+  if ((typeof x !== 'number' && typeof x !== 'string') || (typeof x === 'string' && !x.trim())) return null;
   const n = Number(x);
-  return Number.isFinite(n) ? Math.round(n * 1000) / 10 : null;
+  return Number.isFinite(n) && n >= 0 && n <= 1 ? Math.round(n * 1000) / 10 : null;
 }
 
 // ---- Polymarket (Gamma) -------------------------------------------------
@@ -196,9 +196,10 @@ function marketYes(m) {
     const outcomes = JSON.parse(m.outcomes);
     const prices = JSON.parse(m.outcomePrices);
     const yesIdx = outcomes.findIndex((o) => String(o).toLowerCase() === "yes");
-    const yes = yesIdx >= 0 ? prices[yesIdx] : prices[0];
+    const yes = yesIdx >= 0 ? prices[yesIdx] : null;
+    if ((typeof yes !== 'number' && typeof yes !== 'string') || (typeof yes === 'string' && !yes.trim())) return null;
     const n = Number(yes);
-    return Number.isFinite(n) ? n : null;
+    return Number.isFinite(n) && n >= 0 && n <= 1 ? n : null;
   } catch {
     return null;
   }
@@ -276,11 +277,11 @@ async function kalshiCandles(series, ticker, { days = 730, periodInterval = 1440
         const close = c.price?.close_dollars ?? c.price?.previous_dollars;
         return {
           t: c.end_period_ts,
-          p: close != null ? Math.round(parseFloat(close) * 1000) / 10 : null,
+          p: toPct(close),
           vol: c.volume_fp != null ? Math.round(parseFloat(c.volume_fp)) : 0,
         };
       })
-      .filter((x) => x.p != null);
+      .filter((x) => x.p != null && Number.isFinite(x.t));
   } catch {
     return [];
   }
@@ -302,6 +303,7 @@ async function kalshiCandleOdds(cfg, opts) {
   return {
     demYes: dem.length ? dem[dem.length - 1].p : null,
     repYes: rep.length ? rep[rep.length - 1].p : null,
+    observationAt: dem.length && rep.length ? new Date(Math.min(dem.at(-1).t, rep.at(-1).t) * 1000).toISOString() : null,
   };
 }
 
@@ -380,6 +382,9 @@ async function buildSourcesFrom(polymarketSlug, kalshiCfg, partyHints, opts = PA
     demYes: r.demYes,
     repYes: r.repYes,
     lastUpdated: r.demYes != null || r.repYes != null ? now : null,
+    retrievedAt: r.demYes != null || r.repYes != null ? now : null,
+    observationAt: r.observationAt || null,
+    status: r.demYes != null && r.repYes != null ? "ok" : "unavailable",
   });
   return { sources: [mk("polymarket", "Polymarket", pm), mk("kalshi", "Kalshi", ks)] };
 }
@@ -493,7 +498,7 @@ async function pricesHistory(token, interval = "max", fidelity = 1440) {
     const d = await getJson(
       `${CLOB_BASE}/prices-history?market=${token}&interval=${interval}&fidelity=${fidelity}`
     );
-    return (d.history || []).map((pt) => ({ t: pt.t, p: Math.round(pt.p * 1000) / 10 }));
+    return (d.history || []).map((pt) => ({ t: pt.t, p: toPct(pt.p) })).filter(pt => pt.p != null && Number.isFinite(pt.t));
   } catch {
     return [];
   }

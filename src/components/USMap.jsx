@@ -129,12 +129,11 @@ export default function USMap({ onSelectRace }) {
 
       <div className="mt-2.5 flex justify-center">
         <Takeaway>
-          Democrats need to win <b>6 of these 11 states</b> to take control of the Senate.
+          Inherited scenario: <b>6 of these 11 states</b> gives Democrats control only if all other assumed seats hold and independents caucus as assumed. Not a forecast.
         </Takeaway>
       </div>
       <p className="mt-1.5 text-center text-[10px] text-ops-muted/60">
-        <span className="text-accent">*</span> Categories are based on Ajay’s subjective opinion
-        and will be updated as the race develops.
+        <span className="text-accent">*</span> Categories are Ajay Phatak’s subjective judgments. Review date unknown; not market-derived ratings.
       </p>
     </div>
   );

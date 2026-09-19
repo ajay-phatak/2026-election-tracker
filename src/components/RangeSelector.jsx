@@ -2,6 +2,7 @@
 // race drawer's polling average) and MARKET (betting odds) history charts
 // (control-market panels + the race drawer's odds history).
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const POLL_RANGES = [
   { id: "all", label: "All", days: null },
   { id: "90d", label: "90D", days: 90 },
@@ -29,6 +30,7 @@ export const MARKET_RANGES = [
 // per-race polling trends can go stale (most recent poll weeks old) while a
 // range selector is still open, and slicing against "now" would silently blank
 // the chart instead of showing the last real data.
+// eslint-disable-next-line react-refresh/only-export-components
 export function sliceRange(data, days) {
   if (!days || !data || data.length < 2) return data;
   const newest = data[data.length - 1].t;
