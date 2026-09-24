@@ -175,7 +175,7 @@ export default function TrendChart({ data, series, volumeKey, height = 224, doma
               stroke={s.color}
               strokeWidth={2}
               dot={false}
-              connectNulls
+              connectNulls={false}
               legendType="plainline"
             />
           ))}

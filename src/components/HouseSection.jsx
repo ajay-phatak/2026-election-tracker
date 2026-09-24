@@ -3,6 +3,7 @@ import { WATCHED_RACES, RATINGS, HOUSE_OUTLOOK } from "../config/races.config";
 import { fetchHouseRaces, sourceHasData } from "../lib/api";
 import SourceTag from "./SourceTag";
 import Takeaway from "./Takeaway";
+import { conditionalSeats, bucketFor } from "../lib/quality";
 
 const DEM = "#2563eb";
 const REP = "#dc2626";
@@ -60,10 +61,11 @@ function SeatsBar() {
       </div>
 
       <Takeaway className="mt-2">
-        Democrats need a net <b>+{needed} seats</b> to take the House
+        Inherited seat snapshot: DEM <b>{needed} seats below 218</b>
         {current.ind ? ` · ${current.ind} independent` : ""}
         {current.vacant ? ` · ${current.vacant} vacant` : ""}
       </Takeaway>
+      <p className="mt-1 text-xs text-ops-muted">Configured seat snapshot; observation date unknown. Not a live count.</p>
     </div>
   );
 }
@@ -76,8 +78,8 @@ function Rollup({ caption, tag, counts, footnote }) {
   const order = Object.keys(RATINGS); // safeD ... safeR
   const demBase = counts.safeD + counts.likelyD + counts.leanD;
   const repBase = counts.safeR + counts.likelyR + counts.leanR;
-  const demNeed = Math.max(0, majority - demBase);
-  const repNeed = Math.max(0, majority - repBase);
+  const demNeed = conditionalSeats(demBase, counts.tossup, majority);
+  const repNeed = conditionalSeats(repBase, counts.tossup, majority);
 
   return (
     <div>
@@ -103,7 +105,7 @@ function Rollup({ caption, tag, counts, footnote }) {
         <div className="absolute top-[-2px] h-[calc(100%+4px)] w-px bg-ops-text/80" style={{ left: `${(majority / total) * 100}%` }} />
       </div>
       <Takeaway className="mt-2">
-        Dems need <b>{demNeed} of {counts.tossup}</b> toss-ups · GOP needs <b>{repNeed}</b>
+        If each party wins every seat in its lean-or-better buckets: DEM {demNeed}; GOP {repNeed}. Conditional arithmetic, not a forecast or assured control.
       </Takeaway>
       {footnote && (
         <p className="mt-1 text-[10px] uppercase tracking-wide text-ops-muted/60">{footnote}</p>
@@ -121,15 +123,7 @@ function RatingsRollup() {
 // (|spread| clusters at ≤11, 16.5–28, 37–49.5, ≥56): under 15 toss-up, under 35
 // lean, under 55 likely, else safe. Districts without a two-sided market keep
 // their hand-curated rating.
-function marketBucket(entry) {
-  const src = entry?.sources?.find((s) => s.demYes != null && s.repYes != null);
-  if (!src) return null;
-  const spread = src.demYes - src.repYes;
-  const abs = Math.abs(spread);
-  if (abs < 15) return "tossup";
-  const band = abs < 35 ? "lean" : abs < 55 ? "likely" : "safe";
-  return `${band}${spread > 0 ? "D" : "R"}`;
-}
+
 
 // Same bar, but watchlist seats move to the bucket the betting market implies;
 // all other (non-competitive) seats keep their rating.
@@ -137,7 +131,7 @@ function MarketRollup({ odds }) {
   const counts = useMemo(() => {
     const c = { ...HOUSE_OUTLOOK.ratings };
     for (const d of WATCHED_RACES.house) {
-      const bucket = odds ? marketBucket(odds[d.code]) : null;
+      const bucket = odds ? bucketFor(odds[d.code]) : null;
       if (bucket && bucket !== d.rating) {
         c[d.rating] -= 1;
         c[bucket] += 1;
@@ -150,7 +144,7 @@ function MarketRollup({ odds }) {
     return (
       <div>
         <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-ops-muted">
-          All 435 by market consensus
+          Markets + ratings
           <SourceTag kind="market" />
         </div>
         <div className="h-3 w-full animate-pulse rounded-full bg-ops-border" />
@@ -161,10 +155,10 @@ function MarketRollup({ odds }) {
 
   return (
     <Rollup
-      caption="All 435 by market consensus"
+      caption="Markets + ratings"
       tag="market"
       counts={counts}
-      footnote="Watchlist seats bucketed by market spread (±15/35/55) · rest keep rating"
+      footnote={`${WATCHED_RACES.house.filter(d => bucketFor(odds?.[d.code])).length} of 435 seats use valid two-sided markets; all remaining seats keep inherited Cook ratings. Heuristic D−R price-spread thresholds 15/35/55 pp, not calibrated probabilities.`}
     />
   );
 }
@@ -226,6 +220,9 @@ function Watchlist({ odds, onSelectRace }) {
               <tr
                 key={d.code}
                 onClick={() => onSelectRace(d.code)}
+                tabIndex={0}
+                aria-label={`Open ${d.code} race`}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectRace(d.code); } }}
                 className="cursor-pointer border-b border-ops-border/50 transition-colors hover:bg-ops-panel-2/60"
               >
                 <td className="py-2 pl-2 font-semibold text-ops-text">{d.district}</td>
@@ -254,7 +251,7 @@ function Watchlist({ odds, onSelectRace }) {
         </table>
       </div>
       <p className="mt-2 text-[10px] uppercase tracking-wide text-ops-muted/60">
-        Ratings: {HOUSE_OUTLOOK.source} · {HOUSE_OUTLOOK.asOf} · market odds via Polymarket
+        Inherited ratings: {HOUSE_OUTLOOK.source} · {HOUSE_OUTLOOK.asOf} (not re-reviewed) · market-implied probabilities via Polymarket; — means unavailable
       </p>
     </div>
   );
@@ -269,7 +266,7 @@ export default function HouseSection({ onSelectRace }) {
     let alive = true;
     fetchHouseRaces()
       .then((d) => alive && setOdds(d))
-      .catch(() => {});
+      .catch(() => alive && setOdds({}));
     return () => {
       alive = false;
     };
