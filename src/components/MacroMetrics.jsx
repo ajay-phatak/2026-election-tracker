@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useDataVersion } from "../lib/liveData";
 import { formatDay, formatUpdated } from "../lib/format";
 import {
   fetchControl,
@@ -397,12 +398,19 @@ function HistoryPanel({
   );
 }
 
+// Status updater for a failed re-fetch: keep "ok" (and the data already on
+// screen) if we had it, otherwise show the error.
+const keepOk = (s) => (s === "ok" ? s : "error");
+
 export default function MacroMetrics({ onReady }) {
   const [control, setControl] = useState(null);
   const [status, setStatus] = useState("loading");
   // Keyed by range id ("all"/"90d"/...) so switching the control panel's range
   // selector doesn't discard an already-fetched window — see the effect below.
+  // Each entry is { data, version }: after a live-data refresh the old data
+  // stays on screen while the newer version is fetched.
   const [controlHistory, setControlHistory] = useState({});
+  const version = useDataVersion();
   // The expanded descriptor whose fetch failed. Status is derived per range at
   // render time (see the panel below), so a failure only shows for the request
   // that failed: re-opening or switching range creates a new descriptor, which
@@ -414,20 +422,22 @@ export default function MacroMetrics({ onReady }) {
   //   { type:'poll', id } | { type:'control', chamber, sourceId } | null
   const [expanded, setExpanded] = useState(null);
 
+  // Re-runs on each live-data refresh (`version`). A failed refresh keeps the
+  // data already on screen rather than swapping it for an error.
   useEffect(() => {
     let alive = true;
     const ctl = fetchControl()
       .then((d) => alive && (setControl(d), setStatus("ok")))
-      .catch(() => alive && setStatus("error"));
+      .catch(() => alive && setStatus(keepOk));
     const polls = fetchPolls()
       .then((d) => alive && (setPollData(d), setPollStatus("ok")))
-      .catch(() => alive && setPollStatus("error"));
+      .catch(() => alive && setPollStatus(keepOk));
     // Reveal the dashboard once the above-the-fold market + poll data settles.
     Promise.allSettled([ctl, polls]).then(() => alive && onReady?.());
     return () => {
       alive = false;
     };
-  }, [onReady]);
+  }, [onReady, version]);
 
   // Control history (heavy Kalshi candle pull) is only shown when a control card
   // is expanded, so fetch it lazily on first expand rather than eagerly on load —
@@ -438,13 +448,13 @@ export default function MacroMetrics({ onReady }) {
   useEffect(() => {
     if (expanded?.type !== "control") return;
     const range = expanded.range || "all";
-    if (controlHistory[range]) return;
+    if (controlHistory[range]?.version === version) return;
     let alive = true;
     fetchControlHistory(range)
       .then((d) => {
         // Keep the data even if the user has since switched range: it's keyed by
         // range, so it's still valid and saves a refetch on switching back.
-        setControlHistory((cur) => ({ ...cur, [range]: d }));
+        setControlHistory((cur) => ({ ...cur, [range]: { data: d, version } }));
         if (!alive) return;
         // The range the user actually asked for just landed — quietly warm the
         // other four in the background so the range selector feels instant.
@@ -456,7 +466,7 @@ export default function MacroMetrics({ onReady }) {
     return () => {
       alive = false;
     };
-  }, [expanded, controlHistory]);
+  }, [expanded, controlHistory, version]);
 
   const gb = pollData?.genericBallot;
   const ap = pollData?.approval;
@@ -511,7 +521,7 @@ export default function MacroMetrics({ onReady }) {
     };
   } else if (expanded?.type === "control") {
     const range = expanded.range || "all";
-    const src = controlHistory[range]?.[expanded.chamber]?.sources?.find(
+    const src = controlHistory[range]?.data?.[expanded.chamber]?.sources?.find(
       (s) => s.id === expanded.sourceId
     );
     const isKalshi = expanded.sourceId === "kalshi";

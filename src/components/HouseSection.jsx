@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { WATCHED_RACES, RATINGS, HOUSE_OUTLOOK } from "../config/races.config";
 import { fetchHouseRaces, sourceHasData } from "../lib/api";
+import { useDataVersion } from "../lib/liveData";
 import SourceTag from "./SourceTag";
 import Takeaway from "./Takeaway";
 
@@ -264,7 +265,9 @@ function Watchlist({ odds, onSelectRace }) {
 
 export default function HouseSection({ onSelectRace }) {
   const [odds, setOdds] = useState(null);
+  const version = useDataVersion();
 
+  // Re-runs on each live-data refresh; the previous odds stay up meanwhile.
   useEffect(() => {
     let alive = true;
     fetchHouseRaces()
@@ -273,7 +276,7 @@ export default function HouseSection({ onSelectRace }) {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [version]);
 
   return (
     <section className="rounded-2xl border border-ops-border bg-ops-panel/40 p-4 sm:p-5">

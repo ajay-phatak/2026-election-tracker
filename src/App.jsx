@@ -6,8 +6,37 @@ import RaceDrawer from "./components/RaceDrawer";
 import LoadingScreen from "./components/LoadingScreen";
 import AdSlot from "./components/AdSlot";
 import { prefetchRaces } from "./lib/api";
+import { daysToElection, useAutoRefresh, useDataAsOf, useNow } from "./lib/liveData";
 import { WATCHED_RACES } from "./config/races.config";
 import { AD_SLOTS } from "./config/ads.config";
+
+const LOADER_MAX_MS = 8000;
+
+// Data older than this (three missed 15-min warms) is flagged as delayed.
+const STALE_MS = 45 * 60 * 1000;
+
+const formatAsOf = (ms) =>
+  new Date(ms).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+
+// Header status: the "data as of" line reflects when the KV warmer last wrote
+// the data on screen, turning amber when that's older than STALE_MS.
+function useFreshness() {
+  const asOf = useDataAsOf();
+  const now = useNow();
+  return { asOf, stale: asOf != null && now - asOf > STALE_MS, now };
+}
+
+function Countdown({ now }) {
+  const days = daysToElection(now);
+  if (days < 0) return null;
+  const label =
+    days === 0 ? "Election Day" : days === 1 ? "Election Day is tomorrow" : `${days} days to Election Day`;
+  return (
+    <span className="rounded-full border border-accent/25 bg-accent/10 px-2.5 py-0.5 text-xs font-semibold text-ops-text tabular">
+      {label}
+    </span>
+  );
+}
 
 export default function App() {
   const [selectedCode, setSelectedCode] = useState(null);
@@ -15,10 +44,21 @@ export default function App() {
 
   const handleReady = useCallback(() => setReady(true), []);
 
+  // Never hold the full-screen loader longer than this: if the first data is
+  // slow (each request can take up to 15s to time out, twice with the
+  // fallback), show the dashboard and let the cards keep their own skeletons.
+  useEffect(() => {
+    const id = setTimeout(handleReady, LOADER_MAX_MS);
+    return () => clearTimeout(id);
+  }, [handleReady]);
+
   // Warm per-state odds/history/polls in the background so drawers open instantly.
   useEffect(() => {
     prefetchRaces(WATCHED_RACES.senate.map((r) => r.stateCode));
   }, []);
+
+  useAutoRefresh();
+  const { asOf, stale, now } = useFreshness();
 
   return (
     <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-5 px-4 py-5 sm:px-6 lg:px-8">
@@ -26,21 +66,25 @@ export default function App() {
       {/* Header */}
       <header className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <div className="flex items-center gap-2">
-            <span
-              title="Live · online"
-              className="h-2.5 w-2.5 animate-pulse rounded-full bg-[#22c55e] shadow-[0_0_8px_#22c55e]"
-            />
-            <h1 className="text-lg font-extrabold tracking-tight text-ops-text sm:text-xl">
-              2026 Midterm Elections Tracker
-            </h1>
-          </div>
+          <h1 className="text-lg font-extrabold tracking-tight text-ops-text sm:text-xl">
+            2026 Midterm Elections Tracker
+          </h1>
           <p className="mt-0.5 text-xs text-ops-muted">
             Live battleground tracker · markets, polls &amp; approval at a glance
           </p>
         </div>
-        <div className="text-[10px] uppercase tracking-widest text-ops-muted/70">
-          Live data · Polymarket · Kalshi · VoteHub
+        <div className="mt-1 flex flex-col items-start gap-1.5 sm:mt-0 sm:items-end">
+          <Countdown now={now} />
+          <div className="text-[10px] uppercase tracking-widest text-ops-muted/70">
+            {asOf == null ? (
+              "Live data"
+            ) : stale ? (
+              <span className="text-[#f59e0b]">Data delayed · last update {formatAsOf(asOf)}</span>
+            ) : (
+              `Data as of ${formatAsOf(asOf)}`
+            )}{" "}
+            · Polymarket · Kalshi · VoteHub
+          </div>
         </div>
       </header>
 

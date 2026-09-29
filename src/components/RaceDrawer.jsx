@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useDataVersion } from "../lib/liveData";
 import { CATEGORIES, RATINGS } from "../config/races.config";
 import { getRaceByCode } from "../lib/races";
 import {
@@ -150,6 +151,10 @@ function ProviderOdds({ source, expanded, onToggle }) {
   );
 }
 
+// Status updater for a failed re-fetch: keep "ok" (and the data already on
+// screen) if we had it, otherwise show the error.
+const keepOk = (s) => (s === "ok" ? s : "error");
+
 export default function RaceDrawer({ stateCode, onClose }) {
   const open = Boolean(stateCode);
   // Keep the last selected code so content doesn't blank out during the
@@ -217,21 +222,24 @@ function RaceDetails({ code, race, onClose }) {
 
   // No per-race resets needed: RaceDrawer remounts this component per race
   // (key={code}), so every piece of state starts fresh, ranges included.
+  // Re-runs on each live-data refresh (`version`); a failed refresh keeps the
+  // data already on screen rather than swapping it for an error.
+  const version = useDataVersion();
   useEffect(() => {
     let alive = true;
     fetchRaceOdds(code)
       .then((d) => alive && (setOdds(d), setOddsStatus("ok")))
-      .catch(() => alive && setOddsStatus("error"));
+      .catch(() => alive && setOddsStatus(keepOk));
     fetchRacePolls(code)
       .then((d) => alive && (setPolls(d), setPollsStatus("ok")))
-      .catch(() => alive && setPollsStatus("error"));
+      .catch(() => alive && setPollsStatus(keepOk));
     fetchRaceNews(code)
       .then((d) => alive && (setNews(d), setNewsStatus("ok")))
       .catch(() => alive && setNewsStatus("error"));
     return () => {
       alive = false;
     };
-  }, [code]);
+  }, [code, version]);
 
   // Odds history is fetched in its own effect, keyed on the selected market
   // range, so changing the RangeSelector re-fetches (the loading skeleton shows
@@ -240,11 +248,18 @@ function RaceDetails({ code, race, onClose }) {
     let alive = true;
     fetchRaceHistory(code, marketRange)
       .then((d) => alive && setHistoryResult({ range: marketRange, data: d }))
-      .catch(() => alive && setHistoryResult({ range: marketRange, error: true }));
+      .catch(
+        () =>
+          alive &&
+          // A failed refresh of the range already shown keeps its data.
+          setHistoryResult((cur) =>
+            cur?.range === marketRange && !cur.error ? cur : { range: marketRange, error: true }
+          )
+      );
     return () => {
       alive = false;
     };
-  }, [code, marketRange]);
+  }, [code, marketRange, version]);
   const historyCurrent = historyResult?.range === marketRange ? historyResult : null;
   const historyStatus = historyCurrent ? (historyCurrent.error ? "error" : "ok") : "loading";
   const history = historyCurrent?.data ?? null;

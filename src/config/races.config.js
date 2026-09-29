@@ -1,3 +1,6 @@
+// General election day (YYYY-MM-DD, US Eastern calendar); drives the header countdown.
+export const ELECTION_DAY = "2026-11-03";
+
 // Per-race market identifiers were discovered from the live APIs:
 //   polymarketSlug -> gamma-api.polymarket.com/events?slug=<slug> (party-named sub-markets)
 //   kalshiMarketId -> external-api.kalshi.com .../markets?series_ticker=<id>

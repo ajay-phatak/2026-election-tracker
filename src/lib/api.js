@@ -1,3 +1,5 @@
+import { MARKET_RANGES } from "./ranges";
+
 // Client-side helpers that hit our serverless proxy (/api/*), which normalizes
 // Kalshi + Polymarket into { sources: [{ id, label, demYes, repYes, lastUpdated }] }.
 //
@@ -8,12 +10,51 @@
 // fresh visit to ~1 API request instead of ~13 — which is what the free-tier
 // Cloudflare quotas are budgeted around. History and news stay lazy per drawer.
 //
-// Per-state requests are memoized for the session (only 9 states). Reload to refresh.
+// Responses are memoized per session; refreshData() (driven by useAutoRefresh)
+// swaps in a newer bootstrap, clears those caches and bumps the data version so
+// mounted components re-fetch.
+
+// Every request gives up after this long, so a hung upstream can't leave the
+// loading screen or a skeleton up indefinitely; callers treat it as an error.
+const REQUEST_TIMEOUT_MS = 15000;
 
 async function getJson(url, label) {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`${label} ${r.status}`);
-  return r.json();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const r = await fetch(url, { signal: ctrl.signal });
+    if (!r.ok) throw new Error(`${label} ${r.status}`);
+    return await r.json();
+  } catch (e) {
+    if (e?.name === "AbortError") throw new Error(`${label} timed out`, { cause: e });
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ---- Live-data version --------------------------------------------------
+// `dataVersion` bumps each time refreshData() lands newer data; components
+// subscribe (see src/lib/liveData.js) and include it in their fetch effects.
+// `dataAsOf` is bootstrap's updatedAt (ms): when the KV warmer last wrote it.
+let dataVersion = 0;
+let dataAsOf = null;
+const listeners = new Set();
+const emit = () => listeners.forEach((fn) => fn());
+
+export function subscribeData(fn) {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+export const getDataVersion = () => dataVersion;
+export const getDataAsOf = () => dataAsOf;
+
+function noteAsOf(boot) {
+  const t = Number(boot?.updatedAt);
+  if (Number.isFinite(t) && t !== dataAsOf) {
+    dataAsOf = t;
+    emit();
+  }
 }
 
 // Memoize a promise per key; drop it on failure so a later call can retry.
@@ -37,7 +78,9 @@ function memoize(map, key, make) {
 let bootstrapPromise = null;
 function fetchBootstrap() {
   if (!bootstrapPromise) {
-    bootstrapPromise = getJson("/api/bootstrap", "bootstrap").catch(() => null);
+    bootstrapPromise = getJson("/api/bootstrap", "bootstrap")
+      .then((b) => (noteAsOf(b), b))
+      .catch(() => null);
   }
   return bootstrapPromise;
 }
@@ -144,11 +187,8 @@ export async function fetchRacePolls(stateCode) {
   );
 }
 
-// Market-range ids in fetch order. Mirrors MARKET_RANGES in
-// src/components/RangeSelector.jsx (id field only — label/days stay there,
-// they're UI concerns) — src/lib must not import from src/components, so this
-// list is duplicated; keep it in sync if RangeSelector's ranges change.
-const MARKET_RANGE_IDS = ["all", "90d", "30d", "7d", "24h"];
+// Market-range ids in fetch order.
+const MARKET_RANGE_IDS = MARKET_RANGES.map((r) => r.id);
 
 // Run `fn(id)` for every market range except `current` (already being fetched
 // by the caller), one at a time. Sequential on purpose: 3 of the 5 ranges
@@ -232,4 +272,31 @@ export function prefetchRaces(stateCodes) {
 // True when a normalized source actually carries odds.
 export function sourceHasData(s) {
   return Boolean(s && s.demYes != null && s.repYes != null);
+}
+
+// Re-fetch bootstrap and, if the warmer has written newer data since the one
+// we hold, swap it in: every cache that derives from it (or that the warmer
+// also refreshes, like history) is cleared and the data version bumps, so
+// mounted components re-fetch and lazily-opened ones start fresh. News is left
+// alone (warmed only every ~4h). Returns true when newer data landed.
+export async function refreshData() {
+  let boot;
+  try {
+    boot = await getJson("/api/bootstrap", "bootstrap");
+  } catch {
+    return false; // keep what we have; the next tick retries
+  }
+  const t = Number(boot?.updatedAt);
+  if (!Number.isFinite(t) || (dataAsOf != null && t <= dataAsOf)) return false;
+  bootstrapPromise = Promise.resolve(boot);
+  oddsCache.clear();
+  historyCache.clear();
+  controlHistoryCache.clear();
+  prefetchedSweeps.clear();
+  houseRacesPromise = null;
+  allRacePollsPromise = null;
+  dataAsOf = t;
+  dataVersion++;
+  emit();
+  return true;
 }
