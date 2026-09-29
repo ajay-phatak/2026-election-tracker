@@ -4,21 +4,10 @@
 //   sum < 100  -> the market leaves slack; the gap renders GREY
 //   sum = 100  -> clean split, no middle band
 
+import { GREY, PURPLE } from "../lib/overlap";
+
 const DEM = "#2563eb";
 const REP = "#dc2626";
-const PURPLE = "#9333ea";
-const GREY = "#3a4150";
-
-// Describes the middle band, or null when the values sum to exactly 100.
-export function overlapInfo(demYes, repYes) {
-  if (demYes == null || repYes == null) return null;
-  const sum = demYes + repYes;
-  const delta = Math.round(Math.abs(100 - sum) * 10) / 10;
-  if (delta === 0) return null;
-  return sum > 100
-    ? { text: `+${delta}% overlap`, color: PURPLE }
-    : { text: `${delta}% gap`, color: GREY };
-}
 
 export default function OverlapBar({ demYes, repYes }) {
   if (demYes == null || repYes == null) return null;

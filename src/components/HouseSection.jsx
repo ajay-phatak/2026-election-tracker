@@ -286,7 +286,7 @@ export default function HouseSection({ onSelectRace }) {
         </p>
       </div>
 
-      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
         <SeatsBar />
         <RatingsRollup />
         <MarketRollup odds={odds} />

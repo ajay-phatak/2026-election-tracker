@@ -11,6 +11,16 @@ export function formatUpdated(iso) {
   });
 }
 
+// Format a date-only value as "Sep 28". Poll dates arrive as midnight UTC
+// ("2026-09-28T00:00:00Z"), so they're formatted in UTC; in US time zones the
+// local rendering would show the previous evening ("Sep 27, 8:00 PM").
+export function formatDay(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+}
+
 // Compact relative time for news items, e.g. "3h ago", "2d ago", "just now".
 export function formatRelative(iso) {
   if (!iso) return "";

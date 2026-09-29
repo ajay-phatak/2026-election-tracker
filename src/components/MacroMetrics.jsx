@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { formatUpdated } from "../lib/format";
+import { formatDay, formatUpdated } from "../lib/format";
 import {
   fetchControl,
   fetchControlHistory,
@@ -7,8 +7,10 @@ import {
   prefetchControlHistoryRanges,
   sourceHasData,
 } from "../lib/api";
-import OverlapBar, { overlapInfo } from "./OverlapBar";
-import RangeSelector, { POLL_RANGES, MARKET_RANGES, sliceRange } from "./RangeSelector";
+import OverlapBar from "./OverlapBar";
+import { overlapInfo } from "../lib/overlap";
+import RangeSelector from "./RangeSelector";
+import { POLL_RANGES, MARKET_RANGES, sliceRange } from "../lib/ranges";
 import SourceTag from "./SourceTag";
 import TrendChart from "./TrendChart";
 import VolumeStat from "./VolumeStat";
@@ -227,7 +229,7 @@ function PollCard({
       <div className="mt-auto flex items-center justify-between gap-2 pt-1">
         <SourceTag kind="polls" />
         <p className="whitespace-nowrap text-[10px] uppercase tracking-wide text-ops-muted/70">
-          Updated {formatUpdated(lastUpdated)}
+          Updated {formatDay(lastUpdated)}
         </p>
       </div>
     </CardShell>
@@ -385,7 +387,7 @@ function HistoryPanel({
       {status === "ok" &&
         (hasData ? (
           <>
-            <TrendChart data={data} series={series} volumeKey={volumeKey} />
+            <TrendChart data={data} series={series} volumeKey={volumeKey} utcDates={tag === "polls"} />
             {volume && <VolumeStat volume={volume} />}
           </>
         ) : (
@@ -401,7 +403,11 @@ export default function MacroMetrics({ onReady }) {
   // Keyed by range id ("all"/"90d"/...) so switching the control panel's range
   // selector doesn't discard an already-fetched window — see the effect below.
   const [controlHistory, setControlHistory] = useState({});
-  const [controlHistoryStatus, setControlHistoryStatus] = useState("loading");
+  // The expanded descriptor whose fetch failed. Status is derived per range at
+  // render time (see the panel below), so a failure only shows for the request
+  // that failed: re-opening or switching range creates a new descriptor, which
+  // reads as "loading" while its own fetch runs.
+  const [controlHistoryFailed, setControlHistoryFailed] = useState(null);
   const [pollData, setPollData] = useState(null);
   const [pollStatus, setPollStatus] = useState("loading");
   // One expansion at a time:
@@ -434,19 +440,19 @@ export default function MacroMetrics({ onReady }) {
     const range = expanded.range || "all";
     if (controlHistory[range]) return;
     let alive = true;
-    setControlHistoryStatus("loading");
     fetchControlHistory(range)
       .then((d) => {
-        if (!alive) return;
+        // Keep the data even if the user has since switched range: it's keyed by
+        // range, so it's still valid and saves a refetch on switching back.
         setControlHistory((cur) => ({ ...cur, [range]: d }));
-        setControlHistoryStatus("ok");
+        if (!alive) return;
         // The range the user actually asked for just landed — quietly warm the
         // other four in the background so the range selector feels instant.
         // Only reachable once a control card is expanded (the guard above this
         // effect), never from page load.
         prefetchControlHistoryRanges(range);
       })
-      .catch(() => alive && setControlHistoryStatus("error"));
+      .catch(() => alive && setControlHistoryFailed(expanded));
     return () => {
       alive = false;
     };
@@ -512,7 +518,7 @@ export default function MacroMetrics({ onReady }) {
     panel = {
       title: `${expanded.chamber === "senate" ? "Senate" : "House"} Control · ${src?.label || ""} · win probability over time`,
       tag: "market",
-      status: controlHistoryStatus,
+      status: controlHistory[range] ? "ok" : controlHistoryFailed === expanded ? "error" : "loading",
       hasData: Boolean(src?.hasData),
       // No client-side slicing here (unlike the poll branch's sliceRange) —
       // the server already returns exactly the requested window.

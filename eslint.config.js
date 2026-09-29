@@ -18,4 +18,9 @@ export default defineConfig([
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
   },
+  // Server-side code: Vercel/Vite handlers (Node) and Cloudflare functions/Worker.
+  {
+    files: ['api/**/*.js', 'functions/**/*.js', 'cron-worker/**/*.js', 'vite.config.js'],
+    languageOptions: { globals: { ...globals.node, ...globals.serviceworker } },
+  },
 ])

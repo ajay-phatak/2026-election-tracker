@@ -28,8 +28,14 @@ function useElementWidth() {
   return [ref, width];
 }
 
-const fmtDate = (t) =>
-  new Date(t * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+// `utc` for date-only series (polls, stamped at midnight UTC), which would
+// otherwise render as the previous day in US time zones.
+const fmtDate = (t, utc) =>
+  new Date(t * 1000).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    ...(utc && { timeZone: "UTC" }),
+  });
 const fmtTime = (t) =>
   new Date(t * 1000).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 
@@ -59,7 +65,7 @@ const AUTO_DOMAIN = [
 // `fine` (sub-daily point spacing, see TrendChart below) adds a time-of-day
 // alongside the date — otherwise a hovered 24H/7D point only shows its day,
 // indistinguishable from every other point hovered that same day.
-function TrendTooltip({ active, payload, label, series, volumeKey, fine }) {
+function TrendTooltip({ active, payload, label, series, volumeKey, fine, utc }) {
   if (!active || !payload?.length) return null;
   const vol = volumeKey ? payload.find((p) => p.dataKey === volumeKey) : null;
   return (
@@ -69,6 +75,7 @@ function TrendTooltip({ active, payload, label, series, volumeKey, fine }) {
           month: "short",
           day: "numeric",
           year: "numeric",
+          ...(utc && { timeZone: "UTC" }),
         })}
         {fine && ` · ${fmtTime(label)}`}
       </div>
@@ -92,7 +99,8 @@ function TrendTooltip({ active, payload, label, series, volumeKey, fine }) {
 // Generic two-series time-series chart. `data` rows are { t: unixSeconds, [key]: pct }.
 // `series` is [{ key, color, label }]. With `volumeKey`, that field renders as faded
 // bars on a right-hand axis. Used by odds history, macro poll history, and drawer polling.
-export default function TrendChart({ data, series, volumeKey, height = 224, domain = AUTO_DOMAIN }) {
+// `utcDates` labels days in UTC, for poll series whose points are date-only.
+export default function TrendChart({ data, series, volumeKey, height = 224, domain = AUTO_DOMAIN, utcDates = false }) {
   const [ref, width] = useElementWidth();
 
   // Derived from `data` itself (no new required prop, so every existing
@@ -125,7 +133,7 @@ export default function TrendChart({ data, series, volumeKey, height = 224, doma
           <CartesianGrid stroke="#1f2738" strokeDasharray="3 3" vertical={false} />
           <XAxis
             dataKey="t"
-            tickFormatter={intraday ? fmtTime : fmtDate}
+            tickFormatter={intraday ? fmtTime : (t) => fmtDate(t, utcDates)}
             tick={{ fill: "#8a97ac", fontSize: 11 }}
             stroke="#1f2738"
             minTickGap={48}
@@ -149,7 +157,7 @@ export default function TrendChart({ data, series, volumeKey, height = 224, doma
               width={42}
             />
           )}
-          <Tooltip content={<TrendTooltip series={series} volumeKey={volumeKey} fine={fine} />} />
+          <Tooltip content={<TrendTooltip series={series} volumeKey={volumeKey} fine={fine} utc={utcDates} />} />
           <Legend
             iconType="plainline"
             wrapperStyle={{ fontSize: 12, color: "#8a97ac" }}

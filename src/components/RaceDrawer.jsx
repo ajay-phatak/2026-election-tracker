@@ -9,12 +9,14 @@ import {
   prefetchRaceHistoryRanges,
   sourceHasData,
 } from "../lib/api";
-import OverlapBar, { overlapInfo } from "./OverlapBar";
-import RangeSelector, { POLL_RANGES, MARKET_RANGES, sliceRange } from "./RangeSelector";
+import OverlapBar from "./OverlapBar";
+import { overlapInfo } from "../lib/overlap";
+import RangeSelector from "./RangeSelector";
+import { POLL_RANGES, MARKET_RANGES, sliceRange } from "../lib/ranges";
 import SourceTag from "./SourceTag";
 import TrendChart from "./TrendChart";
 import VolumeStat from "./VolumeStat";
-import { formatUpdated, formatRelative } from "../lib/format";
+import { formatDay, formatUpdated, formatRelative } from "../lib/format";
 
 const POLL_SERIES = [
   { key: "dem", color: "#2563eb", label: "Democrat" },
@@ -150,11 +152,11 @@ function ProviderOdds({ source, expanded, onToggle }) {
 
 export default function RaceDrawer({ stateCode, onClose }) {
   const open = Boolean(stateCode);
-  // Keep the last selected code so content doesn't blank out during the slide-out.
+  // Keep the last selected code so content doesn't blank out during the
+  // slide-out. Adjusted during render (React's pattern for state derived from a
+  // prop) rather than in an effect, so there's no extra render with stale content.
   const [activeCode, setActiveCode] = useState(stateCode);
-  useEffect(() => {
-    if (stateCode) setActiveCode(stateCode);
-  }, [stateCode]);
+  if (stateCode && stateCode !== activeCode) setActiveCode(stateCode);
 
   // Close on Escape.
   useEffect(() => {
@@ -164,98 +166,7 @@ export default function RaceDrawer({ stateCode, onClose }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  // Live betting odds + historical series for the selected race.
-  const [odds, setOdds] = useState(null);
-  const [oddsStatus, setOddsStatus] = useState("loading"); // loading | ok | error
-  const [history, setHistory] = useState(null);
-  const [historyStatus, setHistoryStatus] = useState("loading");
-  const [expandedSource, setExpandedSource] = useState(null);
-  const [polls, setPolls] = useState(null);
-  const [pollsStatus, setPollsStatus] = useState("loading");
-  const [pollRange, setPollRange] = useState("all");
-  const [marketRange, setMarketRange] = useState("all");
-  const [news, setNews] = useState(null);
-  const [newsStatus, setNewsStatus] = useState("loading");
-
-  useEffect(() => {
-    if (!activeCode) return;
-    let alive = true;
-    setOddsStatus("loading");
-    setOdds(null);
-    setExpandedSource(null);
-    setPollsStatus("loading");
-    setPolls(null);
-    setPollRange("all"); // don't carry a stale 30D/90D window into the next race
-    setMarketRange("all"); // ditto for the odds-history range
-    setNewsStatus("loading");
-    setNews(null);
-    fetchRaceOdds(activeCode)
-      .then((d) => alive && (setOdds(d), setOddsStatus("ok")))
-      .catch(() => alive && setOddsStatus("error"));
-    fetchRacePolls(activeCode)
-      .then((d) => alive && (setPolls(d), setPollsStatus("ok")))
-      .catch(() => alive && setPollsStatus("error"));
-    fetchRaceNews(activeCode)
-      .then((d) => alive && (setNews(d), setNewsStatus("ok")))
-      .catch(() => alive && setNewsStatus("error"));
-    return () => {
-      alive = false;
-    };
-  }, [activeCode]);
-
-  // Odds history is fetched in its own effect, keyed on the selected market
-  // range as well as the race, so changing the RangeSelector re-fetches
-  // (showing the loading skeleton meanwhile) without also re-fetching odds/
-  // polls/news above. The race-change effect above resets `marketRange` to
-  // "all", which — combined with `activeCode` changing — still fires this
-  // exactly once per race switch.
-  useEffect(() => {
-    if (!activeCode) return;
-    let alive = true;
-    // Same synchronous "reset to loading before the async fetch" idiom already
-    // used above (setOddsStatus) and in MacroMetrics — flagged by this rule
-    // there too; suppressed rather than restructured to match.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setHistoryStatus("loading");
-    setHistory(null);
-    fetchRaceHistory(activeCode, marketRange)
-      .then((d) => alive && (setHistory(d), setHistoryStatus("ok")))
-      .catch(() => alive && setHistoryStatus("error"));
-    return () => {
-      alive = false;
-    };
-  }, [activeCode, marketRange]);
-
-  // Quietly warm the other four provider-history ranges once the user has
-  // actually expanded a chart (expandedSource set — that's when the range
-  // selector becomes visible) AND the range they're looking at has loaded.
-  // Deliberately a separate effect from the one above: that effect fetches
-  // history on every drawer open regardless of expandedSource, and firing a
-  // 4-request sweep before the user has asked to see any history at all would
-  // defeat the point of gating this on expand. The `alive` flag is threaded
-  // into the sweep as `shouldContinue` so that clicking through several states
-  // with a chart expanded can't leave a previous state's sweep still issuing
-  // requests after the drawer has moved on — cleanup flips it false and the
-  // sweep stops before its next request.
-  useEffect(() => {
-    if (!expandedSource || historyStatus !== "ok") return;
-    let alive = true;
-    prefetchRaceHistoryRanges(activeCode, marketRange, () => alive);
-    return () => {
-      alive = false;
-    };
-  }, [expandedSource, historyStatus, activeCode, marketRange]);
-
   const race = activeCode ? getRaceByCode(activeCode) : null;
-  // Senate races carry a `category`; House districts carry a `rating`.
-  const tag = race ? (race.category ? CATEGORIES[race.category] : RATINGS[race.rating]) : null;
-  const oddsSources = odds?.sources || [];
-  const anyOdds = oddsSources.some(sourceHasData);
-  const oddsUpdated = oddsSources.find(sourceHasData)?.lastUpdated;
-  const expandedHistory = expandedSource
-    ? (history?.sources || []).find((s) => s.id === expandedSource)
-    : null;
-  const expandedLabel = oddsSources.find((s) => s.id === expandedSource)?.label;
 
   return (
     <>
@@ -277,218 +188,305 @@ export default function RaceDrawer({ stateCode, onClose }) {
           open ? "translate-x-0" : "translate-x-full"
         }`}
       >
-        {race && (
-          <>
-            {/* Header */}
-            <div className="sticky top-0 z-10 flex items-start justify-between border-b border-ops-border bg-ops-panel/95 px-5 py-4 backdrop-blur">
-              <div>
-                <div className="flex items-center gap-2">
-                  <h2 className="text-xl font-bold text-ops-text">
-                    {race.district ?? race.state}
-                  </h2>
-                  <span
-                    className="rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide"
-                    style={{ color: tag.color, backgroundColor: `${tag.color}24` }}
-                  >
-                    {tag.label}
-                  </span>
-                </div>
-                <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                  <span className="text-sm text-ops-muted">
-                    {race.district ? `${race.state} · ` : ""}
-                    {race.incumbent}
-                  </span>
-                  <PartyBadge party={race.party} />
-                </div>
-              </div>
-              <button
-                onClick={onClose}
-                aria-label="Close"
-                className="-mr-1 rounded-md p-1.5 text-ops-muted transition-colors hover:bg-ops-panel-2 hover:text-ops-text"
-              >
-                <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                  <path
-                    d="M5 5l10 10M15 5L5 15"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                  />
-                </svg>
-              </button>
-            </div>
-
-            {/* Betting Odds — current, two-sided; click a provider for its history */}
-            <Section title="Betting Odds — Win Probability" tag="market">
-              {oddsStatus === "loading" && (
-                <div className="flex gap-3">
-                  <div className="h-28 flex-1 animate-pulse rounded-lg bg-ops-panel-2/60" />
-                  <div className="h-28 flex-1 animate-pulse rounded-lg bg-ops-panel-2/60" />
-                </div>
-              )}
-              {oddsStatus === "error" && (
-                <div className="rounded-lg border border-dashed border-ops-border bg-ops-panel-2/50 px-4 py-6 text-center text-sm text-ops-muted">
-                  Couldn’t load market odds.
-                </div>
-              )}
-              {oddsStatus === "ok" &&
-                (anyOdds ? (
-                  <>
-                    <div className="flex items-stretch gap-3">
-                      {oddsSources.map((s) => (
-                        <ProviderOdds
-                          key={s.id}
-                          source={s}
-                          expanded={expandedSource === s.id}
-                          onToggle={() =>
-                            setExpandedSource((cur) => (cur === s.id ? null : s.id))
-                          }
-                        />
-                      ))}
-                    </div>
-
-                    {/* Expanded historical chart */}
-                    {expandedSource && (
-                      <div className="mt-3 rounded-lg border border-ops-border bg-ops-panel-2/40 p-3">
-                        <div className="mb-2 flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-ops-muted">
-                            {expandedLabel} · win probability over time
-                            <SourceTag kind="market" />
-                          </div>
-                          <RangeSelector value={marketRange} onChange={setMarketRange} ranges={MARKET_RANGES} />
-                        </div>
-                        {historyStatus === "loading" && (
-                          <div className="h-56 animate-pulse rounded bg-ops-panel-2/60" />
-                        )}
-                        {historyStatus === "error" && (
-                          <div className="py-8 text-center text-xs text-ops-muted">
-                            Couldn’t load history.
-                          </div>
-                        )}
-                        {historyStatus === "ok" &&
-                          (expandedHistory?.hasData ? (
-                            <>
-                              <TrendChart
-                                data={expandedHistory.points}
-                                series={POLL_SERIES}
-                                volumeKey={expandedSource === "kalshi" ? "volume" : undefined}
-                              />
-                              {expandedSource !== "kalshi" && expandedHistory.volume && (
-                                <VolumeStat volume={expandedHistory.volume} />
-                              )}
-                            </>
-                          ) : (
-                            <div className="py-8 text-center text-xs text-ops-muted">
-                              No history yet
-                            </div>
-                          ))}
-                      </div>
-                    )}
-
-                    {oddsUpdated && (
-                      <p className="mt-2 text-[10px] uppercase tracking-wide text-ops-muted/70">
-                        Updated {formatUpdated(oddsUpdated)}
-                      </p>
-                    )}
-                  </>
-                ) : (
-                  <EmptyNote />
-                ))}
-            </Section>
-
-            {/* Polling Average — Senate only (no per-district House polls fetched) */}
-            {!race.district && (
-            <Section title="Polling Average — D vs R" tag="polls">
-              {pollsStatus === "loading" && (
-                <div className="h-56 animate-pulse rounded bg-ops-panel-2/60" />
-              )}
-              {pollsStatus === "error" && (
-                <div className="rounded-lg border border-dashed border-ops-border bg-ops-panel-2/50 px-4 py-6 text-center text-sm text-ops-muted">
-                  Couldn’t load polling.
-                </div>
-              )}
-              {pollsStatus === "ok" &&
-                (polls && polls.n > 0 ? (
-                  <>
-                    <div className="mb-2 flex items-baseline justify-between tabular">
-                      <span>
-                        <span className="text-2xl font-bold" style={{ color: DEM }}>
-                          {polls.dem ?? "—"}%
-                        </span>
-                        <span className="ml-1 text-[11px] text-ops-muted">Dem</span>
-                      </span>
-                      <span>
-                        <span className="text-2xl font-bold" style={{ color: REP }}>
-                          {polls.rep ?? "—"}%
-                        </span>
-                        <span className="ml-1 text-[11px] text-ops-muted">Rep</span>
-                      </span>
-                    </div>
-                    <OverlapBar demYes={polls.dem} repYes={polls.rep} />
-                    {polls.trend?.length > 1 && (
-                      <div className="mt-3">
-                        <div className="mb-2 flex justify-end">
-                          <RangeSelector value={pollRange} onChange={setPollRange} data={polls.trend} />
-                        </div>
-                        <TrendChart
-                          data={sliceRange(
-                            polls.trend,
-                            POLL_RANGES.find((r) => r.id === pollRange)?.days ?? null
-                          )}
-                          series={POLL_SERIES}
-                        />
-                      </div>
-                    )}
-                    <p className="mt-2 text-[10px] uppercase tracking-wide text-ops-muted/70">
-                      {polls.n} poll{polls.n === 1 ? "" : "s"} · updated {formatUpdated(polls.lastUpdated)}
-                    </p>
-                  </>
-                ) : (
-                  <EmptyNote />
-                ))}
-            </Section>
-            )}
-
-            {/* Recent News — free Google News RSS headlines for this race */}
-            <Section title="Recent News">
-              {newsStatus === "loading" && (
-                <div className="flex flex-col gap-2">
-                  <div className="h-14 animate-pulse rounded-lg bg-ops-panel-2/60" />
-                  <div className="h-14 animate-pulse rounded-lg bg-ops-panel-2/60" />
-                  <div className="h-14 animate-pulse rounded-lg bg-ops-panel-2/60" />
-                </div>
-              )}
-              {newsStatus === "error" && (
-                <div className="rounded-lg border border-dashed border-ops-border bg-ops-panel-2/50 px-4 py-6 text-center text-sm text-ops-muted">
-                  Couldn’t load news.
-                </div>
-              )}
-              {newsStatus === "ok" &&
-                (news?.articles?.length ? (
-                  <>
-                    <NewsList articles={news.articles} />
-                    <p className="mt-2 text-[10px] uppercase tracking-wide text-ops-muted/70">
-                      via Google News
-                    </p>
-                  </>
-                ) : (
-                  <EmptyNote />
-                ))}
-            </Section>
-
-            {/* Notes — hidden entirely when empty */}
-            {race.notes?.trim() && (
-              <Section title="Notes">
-                <div
-                  className="rounded-lg border-l-4 bg-ops-panel-2/60 px-4 py-3 text-sm text-ops-text"
-                  style={{ borderColor: "#2563eb" }}
-                >
-                  {race.notes}
-                </div>
-              </Section>
-            )}
-          </>
-        )}
+        {race && <RaceDetails key={activeCode} code={activeCode} race={race} onClose={onClose} />}
       </aside>
+    </>
+  );
+}
+
+// One race's drawer content. Keyed by race code in RaceDrawer, so switching
+// races remounts it and all per-race state (odds, polls, news, selected ranges,
+// expanded chart) starts fresh.
+function RaceDetails({ code, race, onClose }) {
+  // Senate races carry a `category`; House districts carry a `rating`.
+  const tag = race.category ? CATEGORIES[race.category] : RATINGS[race.rating];
+
+  // Live betting odds + historical series for the selected race.
+  const [odds, setOdds] = useState(null);
+  const [oddsStatus, setOddsStatus] = useState("loading"); // loading | ok | error
+  // { range, data } or { range, error: true } for the most recent history
+  // response; status for the selected range is derived from it below.
+  const [historyResult, setHistoryResult] = useState(null);
+  const [expandedSource, setExpandedSource] = useState(null);
+  const [polls, setPolls] = useState(null);
+  const [pollsStatus, setPollsStatus] = useState("loading");
+  const [pollRange, setPollRange] = useState("all");
+  const [marketRange, setMarketRange] = useState("all");
+  const [news, setNews] = useState(null);
+  const [newsStatus, setNewsStatus] = useState("loading");
+
+  // No per-race resets needed: RaceDrawer remounts this component per race
+  // (key={code}), so every piece of state starts fresh, ranges included.
+  useEffect(() => {
+    let alive = true;
+    fetchRaceOdds(code)
+      .then((d) => alive && (setOdds(d), setOddsStatus("ok")))
+      .catch(() => alive && setOddsStatus("error"));
+    fetchRacePolls(code)
+      .then((d) => alive && (setPolls(d), setPollsStatus("ok")))
+      .catch(() => alive && setPollsStatus("error"));
+    fetchRaceNews(code)
+      .then((d) => alive && (setNews(d), setNewsStatus("ok")))
+      .catch(() => alive && setNewsStatus("error"));
+    return () => {
+      alive = false;
+    };
+  }, [code]);
+
+  // Odds history is fetched in its own effect, keyed on the selected market
+  // range, so changing the RangeSelector re-fetches (the loading skeleton shows
+  // until the new range's response lands) without re-fetching odds/polls/news.
+  useEffect(() => {
+    let alive = true;
+    fetchRaceHistory(code, marketRange)
+      .then((d) => alive && setHistoryResult({ range: marketRange, data: d }))
+      .catch(() => alive && setHistoryResult({ range: marketRange, error: true }));
+    return () => {
+      alive = false;
+    };
+  }, [code, marketRange]);
+  const historyCurrent = historyResult?.range === marketRange ? historyResult : null;
+  const historyStatus = historyCurrent ? (historyCurrent.error ? "error" : "ok") : "loading";
+  const history = historyCurrent?.data ?? null;
+
+  // Quietly warm the other four provider-history ranges once the user has
+  // actually expanded a chart (expandedSource set — that's when the range
+  // selector becomes visible) AND the range they're looking at has loaded.
+  // Deliberately a separate effect from the one above: that effect fetches
+  // history on every drawer open regardless of expandedSource, and firing a
+  // 4-request sweep before the user has asked to see any history at all would
+  // defeat the point of gating this on expand. The `alive` flag is threaded
+  // into the sweep as `shouldContinue` so that clicking through several states
+  // with a chart expanded can't leave a previous state's sweep still issuing
+  // requests after the drawer has moved on — cleanup flips it false and the
+  // sweep stops before its next request.
+  useEffect(() => {
+    if (!expandedSource || historyStatus !== "ok") return;
+    let alive = true;
+    prefetchRaceHistoryRanges(code, marketRange, () => alive);
+    return () => {
+      alive = false;
+    };
+  }, [expandedSource, historyStatus, code, marketRange]);
+
+  const oddsSources = odds?.sources || [];
+  const anyOdds = oddsSources.some(sourceHasData);
+  const oddsUpdated = oddsSources.find(sourceHasData)?.lastUpdated;
+  const expandedHistory = expandedSource
+    ? (history?.sources || []).find((s) => s.id === expandedSource)
+    : null;
+  const expandedLabel = oddsSources.find((s) => s.id === expandedSource)?.label;
+
+  return (
+    <>
+      {/* Header */}
+      <div className="sticky top-0 z-10 flex items-start justify-between border-b border-ops-border bg-ops-panel/95 px-5 py-4 backdrop-blur">
+        <div>
+          <div className="flex items-center gap-2">
+            <h2 className="text-xl font-bold text-ops-text">
+              {race.district ?? race.state}
+            </h2>
+            <span
+              className="rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide"
+              style={{ color: tag.color, backgroundColor: `${tag.color}24` }}
+            >
+              {tag.label}
+            </span>
+          </div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            <span className="text-sm text-ops-muted">
+              {race.district ? `${race.state} · ` : ""}
+              {race.incumbent}
+            </span>
+            <PartyBadge party={race.party} />
+          </div>
+        </div>
+        <button
+          onClick={onClose}
+          aria-label="Close"
+          className="-mr-1 rounded-md p-1.5 text-ops-muted transition-colors hover:bg-ops-panel-2 hover:text-ops-text"
+        >
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <path
+              d="M5 5l10 10M15 5L5 15"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
+      </div>
+
+      {/* Betting Odds — current, two-sided; click a provider for its history */}
+      <Section title="Betting Odds — Win Probability" tag="market">
+        {oddsStatus === "loading" && (
+          <div className="flex gap-3">
+            <div className="h-28 flex-1 animate-pulse rounded-lg bg-ops-panel-2/60" />
+            <div className="h-28 flex-1 animate-pulse rounded-lg bg-ops-panel-2/60" />
+          </div>
+        )}
+        {oddsStatus === "error" && (
+          <div className="rounded-lg border border-dashed border-ops-border bg-ops-panel-2/50 px-4 py-6 text-center text-sm text-ops-muted">
+            Couldn’t load market odds.
+          </div>
+        )}
+        {oddsStatus === "ok" &&
+          (anyOdds ? (
+            <>
+              <div className="flex items-stretch gap-3">
+                {oddsSources.map((s) => (
+                  <ProviderOdds
+                    key={s.id}
+                    source={s}
+                    expanded={expandedSource === s.id}
+                    onToggle={() =>
+                      setExpandedSource((cur) => (cur === s.id ? null : s.id))
+                    }
+                  />
+                ))}
+              </div>
+
+              {/* Expanded historical chart */}
+              {expandedSource && (
+                <div className="mt-3 rounded-lg border border-ops-border bg-ops-panel-2/40 p-3">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-ops-muted">
+                      {expandedLabel} · win probability over time
+                      <SourceTag kind="market" />
+                    </div>
+                    <RangeSelector value={marketRange} onChange={setMarketRange} ranges={MARKET_RANGES} />
+                  </div>
+                  {historyStatus === "loading" && (
+                    <div className="h-56 animate-pulse rounded bg-ops-panel-2/60" />
+                  )}
+                  {historyStatus === "error" && (
+                    <div className="py-8 text-center text-xs text-ops-muted">
+                      Couldn’t load history.
+                    </div>
+                  )}
+                  {historyStatus === "ok" &&
+                    (expandedHistory?.hasData ? (
+                      <>
+                        <TrendChart
+                          data={expandedHistory.points}
+                          series={POLL_SERIES}
+                          volumeKey={expandedSource === "kalshi" ? "volume" : undefined}
+                        />
+                        {expandedSource !== "kalshi" && expandedHistory.volume && (
+                          <VolumeStat volume={expandedHistory.volume} />
+                        )}
+                      </>
+                    ) : (
+                      <div className="py-8 text-center text-xs text-ops-muted">
+                        No history yet
+                      </div>
+                    ))}
+                </div>
+              )}
+
+              {oddsUpdated && (
+                <p className="mt-2 text-[10px] uppercase tracking-wide text-ops-muted/70">
+                  Updated {formatUpdated(oddsUpdated)}
+                </p>
+              )}
+            </>
+          ) : (
+            <EmptyNote />
+          ))}
+      </Section>
+
+      {/* Polling Average — Senate only (no per-district House polls fetched) */}
+      {!race.district && (
+      <Section title="Polling Average — D vs R" tag="polls">
+        {pollsStatus === "loading" && (
+          <div className="h-56 animate-pulse rounded bg-ops-panel-2/60" />
+        )}
+        {pollsStatus === "error" && (
+          <div className="rounded-lg border border-dashed border-ops-border bg-ops-panel-2/50 px-4 py-6 text-center text-sm text-ops-muted">
+            Couldn’t load polling.
+          </div>
+        )}
+        {pollsStatus === "ok" &&
+          (polls && polls.n > 0 ? (
+            <>
+              <div className="mb-2 flex items-baseline justify-between tabular">
+                <span>
+                  <span className="text-2xl font-bold" style={{ color: DEM }}>
+                    {polls.dem ?? "—"}%
+                  </span>
+                  <span className="ml-1 text-[11px] text-ops-muted">Dem</span>
+                </span>
+                <span>
+                  <span className="text-2xl font-bold" style={{ color: REP }}>
+                    {polls.rep ?? "—"}%
+                  </span>
+                  <span className="ml-1 text-[11px] text-ops-muted">Rep</span>
+                </span>
+              </div>
+              <OverlapBar demYes={polls.dem} repYes={polls.rep} />
+              {polls.trend?.length > 1 && (
+                <div className="mt-3">
+                  <div className="mb-2 flex justify-end">
+                    <RangeSelector value={pollRange} onChange={setPollRange} data={polls.trend} />
+                  </div>
+                  <TrendChart
+                    data={sliceRange(
+                      polls.trend,
+                      POLL_RANGES.find((r) => r.id === pollRange)?.days ?? null
+                    )}
+                    series={POLL_SERIES}
+                    utcDates
+                  />
+                </div>
+              )}
+              <p className="mt-2 text-[10px] uppercase tracking-wide text-ops-muted/70">
+                {polls.n} poll{polls.n === 1 ? "" : "s"} · updated {formatDay(polls.lastUpdated)}
+              </p>
+            </>
+          ) : (
+            <EmptyNote />
+          ))}
+      </Section>
+      )}
+
+      {/* Recent News — free Google News RSS headlines for this race */}
+      <Section title="Recent News">
+        {newsStatus === "loading" && (
+          <div className="flex flex-col gap-2">
+            <div className="h-14 animate-pulse rounded-lg bg-ops-panel-2/60" />
+            <div className="h-14 animate-pulse rounded-lg bg-ops-panel-2/60" />
+            <div className="h-14 animate-pulse rounded-lg bg-ops-panel-2/60" />
+          </div>
+        )}
+        {newsStatus === "error" && (
+          <div className="rounded-lg border border-dashed border-ops-border bg-ops-panel-2/50 px-4 py-6 text-center text-sm text-ops-muted">
+            Couldn’t load news.
+          </div>
+        )}
+        {newsStatus === "ok" &&
+          (news?.articles?.length ? (
+            <>
+              <NewsList articles={news.articles} />
+              <p className="mt-2 text-[10px] uppercase tracking-wide text-ops-muted/70">
+                via Google News
+              </p>
+            </>
+          ) : (
+            <EmptyNote />
+          ))}
+      </Section>
+
+      {/* Notes — hidden entirely when empty */}
+      {race.notes?.trim() && (
+        <Section title="Notes">
+          <div
+            className="rounded-lg border-l-4 bg-ops-panel-2/60 px-4 py-3 text-sm text-ops-text"
+            style={{ borderColor: "#2563eb" }}
+          >
+            {race.notes}
+          </div>
+        </Section>
+      )}
     </>
   );
 }
