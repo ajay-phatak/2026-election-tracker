@@ -124,6 +124,10 @@ Add `functions/api/refresh.js` (or a route in the catch-all) exporting `onReques
 - Be resilient: if one source fails, still write the others (don't abort the whole refresh).
 
 ### Cron
+> **Update (2026-09-29):** the schedule now runs as a Cloudflare Cron Trigger Worker
+> (`cron-worker/`). GitHub throttled the 15-min schedule to roughly hourly, with gaps of
+> several hours; the workflow stays for manual warms only.
+
 Use a **GitHub Actions scheduled workflow** (`.github/workflows/refresh.yml`, `on:
 schedule: cron`) that `curl`s `https://2026-election-tracker.pages.dev/api/refresh` with
 the secret. (A companion Cron-Trigger Worker is the alternative; Pages itself has no native
