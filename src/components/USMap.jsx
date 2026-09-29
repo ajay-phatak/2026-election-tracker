@@ -129,7 +129,8 @@ export default function USMap({ onSelectRace }) {
 
       <div className="mt-2.5 flex justify-center">
         <Takeaway>
-          Democrats need to win <b>6 of these 11 states</b> to take control of the Senate.
+          Democrats need to win <b>6 of the 11 races with a Democratic nominee</b> to take
+          control of the Senate (Nebraska’s Osborn is an independent).
         </Takeaway>
       </div>
       <p className="mt-1.5 text-center text-[10px] text-ops-muted/60">

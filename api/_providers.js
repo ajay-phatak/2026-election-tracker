@@ -287,9 +287,11 @@ async function kalshiCandles(series, ticker, { days = 730, periodInterval = 1440
 }
 
 // Build a candlestick cfg for a watched race from its kalshiMarketId (series ticker).
+// `kalshiDemTicker` overrides the anti-GOP side where it isn't the Democrat
+// (Nebraska: independent Dan Osborn is SENATENE-26-DOSB).
 function kalshiCfgForRace(race) {
   const s = race.kalshiMarketId;
-  return s ? { series: s, demTicker: `${s}-26-D`, repTicker: `${s}-26-R` } : null;
+  return s ? { series: s, demTicker: race.kalshiDemTicker ?? `${s}-26-D`, repTicker: `${s}-26-R` } : null;
 }
 
 // Current Kalshi odds from the latest candle close (control markets + state races).

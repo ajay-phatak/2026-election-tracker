@@ -17,7 +17,7 @@
 // has a hard ~100 requests/day free quota. So news is fetched DIRECTLY here with
 // Cloudflare's own NEWS_API_KEY (no dependency on the origin having a news key) and
 // warmed on a SEPARATE, infrequent schedule (the cron's `news` group, ~every 4h =
-// 11 states x 6 = ~66 calls/day, under quota). Warming every 15 min would have blown
+// 12 states x 6 = ~72 calls/day, under quota). Warming every 15 min would have blown
 // the quota. NOTE the cadence is sized against the state count: at 3h (8 runs/day)
 // 11 states would be ~88/day with no room for the 429 retries below, which is why
 // adding Kansas + South Carolina moved the news cron from 3h to 4h. A guard keeps
@@ -39,7 +39,7 @@ const BY_STATE = { merge: true, fillKeys: SENATE_STATES };
 
 // ?only= groups. `markets` = everything the origin serves (core + races +
 // histories), warmed frequently. `news` is warmed on its own slow schedule. `all`
-// = markets + news (for a local full warm; at 11 states it no longer fits the
+// = markets + news (for a local full warm; at 12 states it no longer fits the
 // subrequest budget, so the guard below skips the tail of the news pass). The
 // granular core/races/histories groups remain as a safety valve.
 const GROUPS = ["all", "markets", "core", "races", "histories", "news"];

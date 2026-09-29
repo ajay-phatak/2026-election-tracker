@@ -4,7 +4,7 @@
 // just a reliable clock. See wrangler.toml for why it isn't a GitHub schedule.
 
 // Markets every 15 min; news every 4h at :07 (sized to GNews' ~100/day quota:
-// 11 states x 6 runs — recheck whenever senate states are added).
+// 12 states x 6 runs = ~72 — recheck whenever senate states are added).
 const CRON_MARKETS = "*/15 * * * *";
 const CRON_NEWS = "7 */4 * * *";
 

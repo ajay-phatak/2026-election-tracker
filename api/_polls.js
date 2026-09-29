@@ -48,11 +48,14 @@ function pollSides(poll, isLeft, isRight) {
   return { left: mean(l), right: mean(r) };
 }
 
+// Only polls where BOTH sides matched count. A one-sided match is a different
+// matchup (a withdrawn nominee, a primary loser), and keeping its matched side
+// would blend two races into one average.
 function points(polls, isLeft, isRight) {
   return polls
     .filter((p) => !p.internal)
     .map((p) => ({ t: tsOf(p), ...pollSides(p, isLeft, isRight) }))
-    .filter((p) => p.t > 0 && (p.left != null || p.right != null))
+    .filter((p) => p.t > 0 && p.left != null && p.right != null)
     .sort((a, b) => a.t - b.t);
 }
 
