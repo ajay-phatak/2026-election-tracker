@@ -118,8 +118,8 @@ function RatingsRollup() {
 }
 
 // Bucket a district's market favorite into a rating-equivalent by the raw D−R
-// spread. Thresholds sit in the natural gaps of the June 2026 watchlist odds
-// (|spread| clusters at ≤11, 16.5–28, 37–49.5, ≥56): under 15 toss-up, under 35
+// spread. Thresholds were calibrated to natural gaps in the district odds when
+// first set (|spread| clustered at ≤11, 16.5–28, 37–49.5, ≥56): under 15 toss-up, under 35
 // lean, under 55 likely, else safe. Districts without a two-sided market keep
 // their hand-curated rating.
 function marketBucket(entry) {

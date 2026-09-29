@@ -15,7 +15,7 @@ import { overlapInfo } from "../lib/overlap";
 import RangeSelector from "./RangeSelector";
 import { POLL_RANGES, MARKET_RANGES, sliceRange } from "../lib/ranges";
 import SourceTag from "./SourceTag";
-import TrendChart from "./TrendChart";
+import TrendChart from "./LazyTrendChart";
 import VolumeStat from "./VolumeStat";
 import { formatDay, formatUpdated, formatRelative } from "../lib/format";
 
@@ -26,7 +26,7 @@ const POLL_SERIES = [
 
 const DEM = "#2563eb";
 const REP = "#dc2626";
-const EMPTY_MSG = "No data yet — check back closer to November";
+const EMPTY_MSG = "No data available for this race";
 
 function PartyBadge({ party }) {
   const isDem = party === "D";
@@ -464,7 +464,7 @@ function RaceDetails({ code, race, onClose }) {
       </Section>
       )}
 
-      {/* Recent News — free Google News RSS headlines for this race */}
+      {/* Recent News — GNews headlines for this race */}
       <Section title="Recent News">
         {newsStatus === "loading" && (
           <div className="flex flex-col gap-2">
@@ -483,7 +483,7 @@ function RaceDetails({ code, race, onClose }) {
             <>
               <NewsList articles={news.articles} />
               <p className="mt-2 text-[10px] uppercase tracking-wide text-ops-muted/70">
-                via Google News
+                via GNews
               </p>
             </>
           ) : (

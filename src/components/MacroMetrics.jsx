@@ -13,7 +13,7 @@ import { overlapInfo } from "../lib/overlap";
 import RangeSelector from "./RangeSelector";
 import { POLL_RANGES, MARKET_RANGES, sliceRange } from "../lib/ranges";
 import SourceTag from "./SourceTag";
-import TrendChart from "./TrendChart";
+import TrendChart from "./LazyTrendChart";
 import VolumeStat from "./VolumeStat";
 
 const DEM = "#2563eb";

@@ -1,14 +1,16 @@
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import MacroMetrics from "./components/MacroMetrics";
-import USMap from "./components/USMap";
 import HouseSection from "./components/HouseSection";
-import RaceDrawer from "./components/RaceDrawer";
 import LoadingScreen from "./components/LoadingScreen";
 import AdSlot from "./components/AdSlot";
 import { prefetchRaces } from "./lib/api";
 import { daysToElection, useAutoRefresh, useDataAsOf, useNow } from "./lib/liveData";
 import { WATCHED_RACES } from "./config/races.config";
 import { AD_SLOTS } from "./config/ads.config";
+
+// Map (+ topojson) and the race drawer (+ charts) load as separate chunks.
+const USMap = lazy(() => import("./components/USMap"));
+const RaceDrawer = lazy(() => import("./components/RaceDrawer"));
 
 const LOADER_MAX_MS = 8000;
 
@@ -93,7 +95,11 @@ export default function App() {
 
       {/* Map centerpiece */}
       <main className="rounded-2xl border border-ops-border bg-ops-panel/40 p-4 sm:p-5">
-        <USMap onSelectRace={setSelectedCode} />
+        <Suspense
+          fallback={<div className="h-[510px] animate-pulse rounded-xl bg-ops-panel-2/60 sm:h-[450px]" />}
+        >
+          <USMap onSelectRace={setSelectedCode} />
+        </Suspense>
       </main>
 
       <AdSlot slot={AD_SLOTS.belowMap} />
@@ -113,10 +119,12 @@ export default function App() {
         </a>
       </footer>
 
-      <RaceDrawer
-        stateCode={selectedCode}
-        onClose={() => setSelectedCode(null)}
-      />
+      <Suspense fallback={null}>
+        <RaceDrawer
+          stateCode={selectedCode}
+          onClose={() => setSelectedCode(null)}
+        />
+      </Suspense>
     </div>
   );
 }
