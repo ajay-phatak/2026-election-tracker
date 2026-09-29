@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
-import { useDataVersion } from "../lib/liveData";
+import { useDataVersion, useElectionNow } from "../lib/liveData";
+import { CALLS_FOOTNOTE, raceCall } from "../lib/calls";
+import { pollsCloseLabel, raceState } from "../lib/electionNight";
 import { CATEGORIES, RATINGS } from "../config/races.config";
 import { getRaceByCode } from "../lib/races";
 import {
@@ -10,6 +12,7 @@ import {
   prefetchRaceHistoryRanges,
   sourceHasData,
 } from "../lib/api";
+import CallBadge from "./CallBadge";
 import OverlapBar from "./OverlapBar";
 import { overlapInfo } from "../lib/overlap";
 import RangeSelector from "./RangeSelector";
@@ -287,6 +290,10 @@ function RaceDetails({ code, race, onClose }) {
   const oddsSources = odds?.sources || [];
   const anyOdds = oddsSources.some(sourceHasData);
   const oddsUpdated = oddsSources.find(sourceHasData)?.lastUpdated;
+  // Election night: a market call once polls close, "Polls close …" before.
+  const now = useElectionNow();
+  const call = raceCall(race, oddsSources, now);
+  const closesLabel = pollsCloseLabel(raceState(race), now);
   const expandedHistory = expandedSource
     ? (history?.sources || []).find((s) => s.id === expandedSource)
     : null;
@@ -314,7 +321,12 @@ function RaceDetails({ code, race, onClose }) {
               {race.incumbent}
             </span>
             <PartyBadge party={race.party} />
+            {call && <CallBadge race={race} party={call} />}
           </div>
+          {call && <p className="mt-1.5 text-[10px] text-ops-muted/70">{CALLS_FOOTNOTE}</p>}
+          {closesLabel && (
+            <p className="mt-1.5 text-[10px] font-semibold text-accent">{closesLabel}</p>
+          )}
         </div>
         <button
           onClick={onClose}

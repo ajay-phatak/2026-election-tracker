@@ -4,7 +4,9 @@ import HouseSection from "./components/HouseSection";
 import LoadingScreen from "./components/LoadingScreen";
 import AdSlot from "./components/AdSlot";
 import { prefetchRaces } from "./lib/api";
-import { daysToElection, useAutoRefresh, useDataAsOf, useNow } from "./lib/liveData";
+import SeatTally from "./components/SeatTally";
+import { daysToElection, useAutoRefresh, useDataAsOf, useElectionNow, useNow } from "./lib/liveData";
+import { formatET, isElectionNight, nextClosings } from "./lib/electionNight";
 import { WATCHED_RACES } from "./config/races.config";
 import { AD_SLOTS } from "./config/ads.config";
 
@@ -40,6 +42,16 @@ function Countdown({ now }) {
   );
 }
 
+// Election Day header: the next batch of poll closings, then "All polls closed".
+function PollClosings({ now }) {
+  const next = nextClosings(now);
+  return (
+    <span className="rounded-full border border-accent/25 bg-accent/10 px-2.5 py-0.5 text-xs font-semibold text-ops-text tabular">
+      {next ? `Next poll closings: ${formatET(next.at)} — ${next.states.join(", ")}` : "All polls closed"}
+    </span>
+  );
+}
+
 export default function App() {
   const [selectedCode, setSelectedCode] = useState(null);
   const [ready, setReady] = useState(false);
@@ -60,7 +72,8 @@ export default function App() {
   }, []);
 
   useAutoRefresh();
-  const { asOf, stale, now } = useFreshness();
+  const { asOf, stale } = useFreshness();
+  const electionNow = useElectionNow();
 
   return (
     <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-5 px-4 py-5 sm:px-6 lg:px-8">
@@ -76,7 +89,11 @@ export default function App() {
           </p>
         </div>
         <div className="mt-1 flex flex-col items-start gap-1.5 sm:mt-0 sm:items-end">
-          <Countdown now={now} />
+          {isElectionNight(electionNow) ? (
+            <PollClosings now={electionNow} />
+          ) : (
+            <Countdown now={electionNow} />
+          )}
           <div className="text-[10px] uppercase tracking-widest text-ops-muted/70">
             {asOf == null ? (
               "Live data"
@@ -92,6 +109,9 @@ export default function App() {
 
       {/* Macro metrics */}
       <MacroMetrics onReady={handleReady} />
+
+      {/* Election-night seat counts (renders nothing on other days) */}
+      <SeatTally />
 
       {/* Map centerpiece */}
       <main className="rounded-2xl border border-ops-border bg-ops-panel/40 p-4 sm:p-5">

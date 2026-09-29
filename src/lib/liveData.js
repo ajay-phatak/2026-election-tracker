@@ -1,7 +1,15 @@
 // React side of the live-data refresh in ./api.js.
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { getDataAsOf, getDataVersion, refreshData, subscribeData } from "./api";
-import { ELECTION_DAY } from "../config/races.config";
+import {
+  fetchHouseRaces,
+  fetchRaceOdds,
+  getDataAsOf,
+  getDataVersion,
+  refreshData,
+  subscribeData,
+} from "./api";
+import { ELECTION_DAY, WATCHED_RACES } from "../config/races.config";
+import { getElectionNow } from "./simulate";
 
 // Bumps whenever newer data lands; put it in a fetch effect's deps to re-fetch.
 export const useDataVersion = () => useSyncExternalStore(subscribeData, getDataVersion);
@@ -45,6 +53,56 @@ export function useNow(ms = 60 * 1000) {
     return () => clearInterval(id);
   }, [ms]);
   return now;
+}
+
+// Like useNow, but on the election-night clock: honors ?simulate (see
+// ./simulate.js) and ticks faster so poll closings land within seconds.
+export function useElectionNow(ms = 15 * 1000) {
+  const [now, setNow] = useState(getElectionNow);
+  useEffect(() => {
+    const id = setInterval(() => setNow(getElectionNow()), ms);
+    return () => clearInterval(id);
+  }, [ms]);
+  return now;
+}
+
+// Current odds for every watched Senate race, { GA: { sources }, ... }, for the
+// market calls. Reads the same memoized fetches the drawer uses; states that
+// failed to load are simply absent.
+export function useSenateOdds() {
+  const [odds, setOdds] = useState(null);
+  const version = useDataVersion();
+  useEffect(() => {
+    let alive = true;
+    Promise.all(
+      WATCHED_RACES.senate.map((r) =>
+        fetchRaceOdds(r.stateCode).then(
+          (d) => [r.stateCode, d],
+          () => null
+        )
+      )
+    ).then((rows) => alive && setOdds(Object.fromEntries(rows.filter(Boolean))));
+    return () => {
+      alive = false;
+    };
+  }, [version]);
+  return odds;
+}
+
+// Current odds for every watched House district, { "NY-17": { sources }, ... }, or null.
+export function useHouseOdds() {
+  const [odds, setOdds] = useState(null);
+  const version = useDataVersion();
+  useEffect(() => {
+    let alive = true;
+    fetchHouseRaces()
+      .then((d) => alive && setOdds(d))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [version]);
+  return odds;
 }
 
 // Whole days from today to Election Day, counted on the US Eastern calendar so

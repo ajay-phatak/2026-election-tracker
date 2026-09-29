@@ -1,8 +1,12 @@
 import { useState } from "react";
 import { ComposableMap, Geographies, Geography } from "react-simple-maps";
 import topology from "us-atlas/states-10m.json";
-import { CATEGORIES } from "../config/races.config";
+import { CATEGORIES, WATCHED_RACES } from "../config/races.config";
 import { getRaceByStateName } from "../lib/races";
+import { CALLS_FOOTNOTE, raceCall } from "../lib/calls";
+import { isElectionNight, pollsCloseLabel } from "../lib/electionNight";
+import { useElectionNow, useSenateOdds } from "../lib/liveData";
+import CallBadge from "./CallBadge";
 import Takeaway from "./Takeaway";
 
 const NEUTRAL = "#1c2230";
@@ -29,6 +33,16 @@ function Legend() {
 
 export default function USMap({ onSelectRace }) {
   const [tooltip, setTooltip] = useState(null); // { x, y, race }
+
+  // Election night: states still voting show when polls close; once closed, a
+  // market call (see lib/calls.js) outlines the state in the winner's color.
+  const now = useElectionNow();
+  const odds = useSenateOdds();
+  const calls = {};
+  for (const r of WATCHED_RACES.senate) {
+    const party = raceCall(r, odds?.[r.stateCode]?.sources, now);
+    if (party) calls[r.stateCode] = party;
+  }
 
   return (
     <div>
@@ -63,6 +77,8 @@ export default function USMap({ onSelectRace }) {
                 const race = getRaceByStateName(geo.properties.name);
                 const isWatched = Boolean(race);
                 const fill = isWatched ? CATEGORIES[race.category].color : NEUTRAL;
+                const called = isWatched ? calls[race.stateCode] : null;
+                const calledStroke = called === "D" ? "#3b82f6" : "#ef4444";
 
                 return (
                   <Geography
@@ -88,8 +104,8 @@ export default function USMap({ onSelectRace }) {
                     style={{
                       default: {
                         fill,
-                        stroke: isWatched ? "#0a0e17" : NEUTRAL_STROKE,
-                        strokeWidth: 0.6,
+                        stroke: called ? calledStroke : isWatched ? "#0a0e17" : NEUTRAL_STROKE,
+                        strokeWidth: called ? 1.6 : 0.6,
                         outline: "none",
                       },
                       hover: {
@@ -123,6 +139,17 @@ export default function USMap({ onSelectRace }) {
             >
               {CATEGORIES[tooltip.race.category].label}
             </div>
+            {calls[tooltip.race.stateCode] ? (
+              <div className="mt-1">
+                <CallBadge race={tooltip.race} party={calls[tooltip.race.stateCode]} />
+              </div>
+            ) : (
+              pollsCloseLabel(tooltip.race.stateCode, now) && (
+                <div className="mt-1 text-[10px] font-semibold text-accent">
+                  {pollsCloseLabel(tooltip.race.stateCode, now)}
+                </div>
+              )
+            )}
           </div>
         )}
       </div>
@@ -133,6 +160,9 @@ export default function USMap({ onSelectRace }) {
           control of the Senate (Nebraska’s Osborn is an independent).
         </Takeaway>
       </div>
+      {Object.keys(calls).length > 0 && !isElectionNight(now) && (
+        <p className="mt-1.5 text-center text-[10px] text-ops-muted/60">{CALLS_FOOTNOTE}</p>
+      )}
       <p className="mt-1.5 text-center text-[10px] text-ops-muted/60">
         <span className="text-accent">*</span> Categories are based on Ajay’s subjective opinion
         and will be updated as the race develops.

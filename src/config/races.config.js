@@ -33,7 +33,7 @@ export const WATCHED_RACES = {
     // maps Polymarket's "Will an independent win…" market; since the side keeps its
     // highest-priced market, it outranks the ~0% Democrats market. Kalshi's Osborn
     // market is -26-DOSB, not -26-D (Burbank).
-    { state: "Nebraska", stateCode: "NE", category: "long_shot", incumbent: "Pete Ricketts", party: "R", kalshiMarketId: "SENATENE", kalshiDemTicker: "SENATENE-26-DOSB", polymarketSlug: "nebraska-senate-election-winner", pollParties: { dem: ["Osborn", "Independent"], rep: ["Ricketts"] }, notes: "Dan Osborn is an independent. With no Democrat on the ballot, the tracker shows him on the Democratic side of the odds and polls." },
+    { state: "Nebraska", stateCode: "NE", category: "long_shot", incumbent: "Pete Ricketts", party: "R", kalshiMarketId: "SENATENE", kalshiDemTicker: "SENATENE-26-DOSB", polymarketSlug: "nebraska-senate-election-winner", independent: "Osborn", pollParties: { dem: ["Osborn", "Independent"], rep: ["Ricketts"] }, notes: "Dan Osborn is an independent. With no Democrat on the ballot, the tracker shows him on the Democratic side of the odds and polls." },
   ],
   // Curated competitive House districts. Criterion: every district Cook Political
   // Report rates Tossup or Lean, plus ME-2 (Likely R — the cycle's biggest expected
@@ -97,6 +97,53 @@ export const WATCHED_RACES = {
     { code: "WI-1", state: "Wisconsin", district: "WI-1", incumbent: "Bryan Steil", party: "R", rating: "leanR", polymarketSlug: "wi-01-house-election-winner" },
     { code: "WI-3", state: "Wisconsin", district: "WI-3", incumbent: "Derrick Van Orden", party: "R", rating: "tossup", polymarketSlug: "wi-03-house-election-winner" },
   ],
+}
+
+// Senate math for the election-night tally. `holdovers` are the seats NOT up in
+// 2026 — 32 Democrats plus 2 independents (Sanders, King) who caucus with them = 34
+// D, and 31 Republicans — per Wikipedia's "2026 United States Senate elections"
+// (Sept 2026: 53 R, 45 D, 2 I; 35 seats up = 33 regular + the FL and OH specials, 13
+// D-caucus and 22 R). 34 + 31 + 35 = 100. The watchlist above covers only 12 of the
+// 35 seats up; `untracked` covers the other 23. 51 wins the majority outright; at
+// 50-50 the vice president (a Republican) breaks ties.
+//
+// `untracked`: the 23 seats up that aren't on the watchlist, with the party holding
+// each (Wikipedia's "2026 United States Senate elections" predictions table; 12
+// tracked + 23 = 35, and holders split 11 D-caucus + 12 R here, on top of 2 D + 10 R
+// tracked = 13 / 22). The 21 rated Solid by Cook (Sept 23, 2026) and Safe by Sabato
+// (Sept 22) count for their holder once the state's polls close. MN (Likely D, both)
+// and NH (Cook Tossup, Sabato Lean D) are genuinely competitive, so they are flagged
+// `safe: false` and stay uncalled.
+export const SENATE_OUTLOOK = {
+  majority: 51,
+  total: 100,
+  holdovers: { dem: 34, rep: 31 },
+  seatsUp: 35,
+  untracked: {
+    AL: { party: "R", safe: true },
+    AR: { party: "R", safe: true },
+    CO: { party: "D", safe: true },
+    DE: { party: "D", safe: true },
+    ID: { party: "R", safe: true },
+    IL: { party: "D", safe: true },
+    KY: { party: "R", safe: true },
+    LA: { party: "R", safe: true },
+    MA: { party: "D", safe: true },
+    MN: { party: "D", safe: false },
+    MS: { party: "R", safe: true },
+    MT: { party: "R", safe: true },
+    NH: { party: "D", safe: false },
+    NJ: { party: "D", safe: true },
+    NM: { party: "D", safe: true },
+    OK: { party: "R", safe: true },
+    OR: { party: "D", safe: true },
+    RI: { party: "D", safe: true },
+    SD: { party: "R", safe: true },
+    TN: { party: "R", safe: true },
+    VA: { party: "D", safe: true },
+    WV: { party: "R", safe: true },
+    WY: { party: "R", safe: true },
+  },
 }
 
 // Chamber-control markets shown in the top MacroMetrics cards.
